@@ -335,3 +335,7 @@ Prometheus снимает `http_requests_total`, `http_request_duration_seconds`
 ![Сбор исследовательского датасета](docs/bpmn/Process_Aegis.png)
 
 [Редактируемая BPMN 2.0 схема](docs/bpmn/aegis-alpha-data-collection.bpmn) · [Проверка проекта 03.10.2026](docs/project-review-2026-10-03.md).
+
+## Создатель проекта
+
+**Дмитрий Степанов** — создатель проекта AEGIS Alpha. GitHub: [dimitry8st-prog](https://github.com/dimitry8st-prog).
