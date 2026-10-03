@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="800" viewBox="0 0 1800 800"><rect width="100%" height="100%" fill="white"/><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#193b63"/></marker></defs>
+<text x="45" y="28" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" dominant-baseline="hanging">AEGIS Alpha | 4. Ограниченные повторы операции</text>
+<text x="45" y="78" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Единый подпроцесс для чтения, UPSERT, карантина и манифеста. Максимум 3 попытки; крайний срок пакета — 15 минут.</text>
+<polyline points="118,214 190,214" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="490,215 610,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="920,215 1020,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1330,215 1435,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1485,215 1650,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1530" y="180" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="1460,240 1460,430 1225,430 1225,520" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1410" y="390" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="1200,545 898,545" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1030" y="510" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="1250,545 1490,545" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1340" y="510" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="850,544 765,544 765,260" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="450" y="450" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Следующая попытка</text>
+<ellipse cx="94.0" cy="214.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="2"/>
+<text x="94.0" y="263" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Вызвана</text>
+<text x="94.0" y="289" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">операция</text>
+<rect x="190" y="170" width="300" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="340.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Установить attempt = 0</text>
+<text x="340.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">и ключ операции</text>
+<rect x="610" y="170" width="310" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="765.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Увеличить attempt</text>
+<text x="765.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">выполнить операцию</text>
+<rect x="1020" y="170" width="310" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="1175.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Проверить результат</text>
+<text x="1175.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">и неизвестный исход</text>
+<polyline points="1460.0,190 1485,215.0 1460.0,240 1435,215.0 1460.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1460.0,190 1485,215.0 1460.0,240 1435,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1460.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="1460.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Успех</text>
+<text x="1460.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">подтверждён?</text>
+<ellipse cx="1674.0" cy="214.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="1674.0" y="263" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">SUCCESS</text>
+<polyline points="1225.0,520 1250,545.0 1225.0,570 1200,545.0 1225.0,520" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1225.0,520 1250,545.0 1225.0,570 1200,545.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1225.0" y="545.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="1105.0" y="455" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Можно</text>
+<text x="1105.0" y="480" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">повторить?</text>
+<ellipse cx="874.0" cy="544.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="2"/>
+<ellipse cx="874.0" cy="544.0" rx="19.0" ry="19.0" fill="none" stroke="#193b63" stroke-width="2"/>
+<polyline points="874.0,532.0 874.0,544.0 884.0,549.0" fill="none" stroke="#193b63" stroke-width="2"/>
+<text x="874.0" y="593" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Подождать</text>
+<text x="874.0" y="619" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">30 секунд</text>
+<ellipse cx="1514.0" cy="544.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="1514.0" y="593" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">FAILURE</text>
+<text x="1514.0" y="619" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">код + ключ + attempt</text>
+<text x="45" y="715" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Круг — событие · толстый круг — результат · × — выбор · + — параллельность</text>
+<text x="45" y="745" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Толстый блок — вызываемый подпроцесс · ≡ — последовательная обработка каждой записи</text>
+</svg>

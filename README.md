@@ -327,3 +327,11 @@ Prometheus снимает `http_requests_total`, `http_request_duration_seconds`
 ## Лицензия
 
 Внутренний проект. Отдельный файл лицензии не задан.
+
+## Процесс сбора данных — BPMN
+
+[Описание процесса и варианты реализации](docs/aegis-alpha-bpmn.md) включают границы, условия, карантин, ограниченные повторы и результаты READY / PARTIAL / FAILED. Это целевая модель, не запущенный сборщик.
+
+![Сбор исследовательского датасета](docs/bpmn/Process_Aegis.png)
+
+[Редактируемая BPMN 2.0 схема](docs/bpmn/aegis-alpha-data-collection.bpmn) · [Проверка проекта 03.10.2026](docs/project-review-2026-10-03.md).
