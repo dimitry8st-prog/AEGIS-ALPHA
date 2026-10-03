@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="960" viewBox="0 0 1800 960"><rect width="100%" height="100%" fill="white"/><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#193b63"/></marker></defs>
+<text x="45" y="28" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" dominant-baseline="hanging">AEGIS Alpha | 1. Сбор исследовательского датасета</text>
+<text x="45" y="78" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Граница: запуск пакета → сохранённый манифест. Прогнозы, торговля и публикация сигналов вне процесса.</text>
+<polyline points="118,214 190,214" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="410,215 470,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="520,215 610,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="550" y="180" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="495,240 495,590 355,590 355,680" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="505" y="410" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="635,190 635,170 755,170" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="635,240 635,355 755,355" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1005,170 1105,170 1105,190" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1005,355 1105,355 1105,240" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1130,215 1230,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1280,215 1390,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1320" y="180" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="1255,240 1255,680" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1265" y="475" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="1535,260 1535,465" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1560,490 1690,490" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1600" y="460" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="1510,490 1450,490 1450,575 355,575 355,680" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1360" y="545" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="1400,725 1460,725" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1510,725 1680,725" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1560" y="695" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="1485,750 1485,835 355,835 355,770" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1030" y="805" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="500,725 620,725" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<ellipse cx="94.0" cy="214.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="2"/>
+<text x="94.0" y="263" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Запуск</text>
+<text x="94.0" y="289" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">пакета</text>
+<rect x="190" y="170" width="220" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="300.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Проверить</text>
+<text x="300.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">конфигурацию</text>
+<polyline points="495.0,190 520,215.0 495.0,240 470,215.0 495.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="495.0,190 520,215.0 495.0,240 470,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="495.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="495.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Настройки</text>
+<text x="495.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">корректны?</text>
+<polyline points="635.0,190 660,215.0 635.0,240 610,215.0 635.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="635.0,190 660,215.0 635.0,240 610,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="635.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">+</text>
+<text x="635.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Запустить</text>
+<text x="635.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">оба потока</text>
+<rect x="755" y="125" width="250" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="880.0" y="151.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Собрать новости</text>
+<text x="880.0" y="178.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">тип = news</text>
+<rect x="755" y="310" width="250" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="880.0" y="336.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Собрать котировки</text>
+<text x="880.0" y="363.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">тип = quotes</text>
+<polyline points="1105.0,190 1130,215.0 1105.0,240 1080,215.0 1105.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1105.0,190 1130,215.0 1105.0,240 1080,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1105.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">+</text>
+<text x="1105.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Оба потока</text>
+<text x="1105.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">завершены</text>
+<polyline points="1255.0,190 1280,215.0 1255.0,240 1230,215.0 1255.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1255.0,190 1280,215.0 1255.0,240 1230,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1255.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="1255.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Пакет</text>
+<text x="1255.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">полон?</text>
+<rect x="1390" y="170" width="280" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="1530.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Сохранить манифест</text>
+<text x="1530.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">статус = READY</text>
+<polyline points="1535.0,465 1560,490.0 1535.0,515 1510,490.0 1535.0,465" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1535.0,465 1560,490.0 1535.0,515 1510,490.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1535.0" y="490.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="1415.0" y="400" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Сохранение</text>
+<text x="1415.0" y="425" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">подтверждено?</text>
+<ellipse cx="1714.0" cy="494.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="1714.0" y="543" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Датасет готов</text>
+<text x="1714.0" y="569" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">READY</text>
+<rect x="1120" y="680" width="280" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="1260.0" y="706.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Сохранить манифест</text>
+<text x="1260.0" y="733.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">статус = PARTIAL</text>
+<polyline points="1485.0,700 1510,725.0 1485.0,750 1460,725.0 1485.0,700" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="1485.0,700 1510,725.0 1485.0,750 1460,725.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="1485.0" y="725.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="1485.0" y="635" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Сохранение</text>
+<text x="1485.0" y="660" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">подтверждено?</text>
+<ellipse cx="1704.0" cy="724.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="1704.0" y="773" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Пакет неполон</text>
+<text x="1704.0" y="799" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">PARTIAL</text>
+<rect x="210" y="680" width="290" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="355.0" y="706.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Записать диагностику</text>
+<text x="355.0" y="733.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">для оператора</text>
+<ellipse cx="644.0" cy="724.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="644.0" y="773" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Пакет не готов</text>
+<text x="644.0" y="799" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">FAILED</text>
+<text x="45" y="875" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Круг — событие · толстый круг — результат · × — выбор · + — параллельность</text>
+<text x="45" y="905" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Толстый блок — вызываемый подпроцесс · ≡ — последовательная обработка каждой записи</text>
+</svg>

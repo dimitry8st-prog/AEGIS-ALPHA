@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="780" viewBox="0 0 1800 780"><rect width="100%" height="100%" fill="white"/><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#193b63"/></marker></defs>
+<text x="45" y="28" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" dominant-baseline="hanging">AEGIS Alpha | 2. Подпроцесс сбора одного потока</text>
+<text x="45" y="78" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Вызывается для news и quotes. Возвращает итог всегда; отказ одного потока не блокирует параллельное соединение.</text>
+<polyline points="118,214 190,214" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="450,215 520,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="570,215 680,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="610" y="180" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Да</text>
+<polyline points="545,240 545,524 750,524" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="555" y="370" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Нет</text>
+<polyline points="990,215 1100,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="1380,215 1510,215" fill="none" stroke="#193b63" stroke-width="2" marker-end="url(#arrow)"/>
+<ellipse cx="94.0" cy="214.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="2"/>
+<text x="94.0" y="263" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Получен</text>
+<text x="94.0" y="289" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">контекст потока</text>
+<rect x="190" y="170" width="260" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="320.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Получить данные</text>
+<text x="320.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">через адаптер</text>
+<polyline points="545.0,190 570,215.0 545.0,240 520,215.0 545.0,190" fill="none" stroke="#193b63" stroke-width="2"/>
+<polygon points="545.0,190 570,215.0 545.0,240 520,215.0" fill="#fff3dc" stroke="#193b63" stroke-width="2"/>
+<text x="545.0" y="215.0" font-family="DejaVu Sans,sans-serif" font-size="32" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">×</text>
+<text x="545.0" y="125" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Чтение</text>
+<text x="545.0" y="150" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">успешно?</text>
+<rect x="680" y="170" width="310" height="100" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="4"/>
+<text x="835.0" y="201.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Проверить и сохранить</text>
+<text x="835.0" y="228.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">каждую запись</text>
+<text x="835.0" y="256" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">≡</text>
+<rect x="1100" y="170" width="280" height="90" rx="12" fill="#eef5fc" stroke="#193b63" stroke-width="2"/>
+<text x="1240.0" y="196.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Подсчитать записи</text>
+<text x="1240.0" y="223.5" font-family="DejaVu Sans,sans-serif" font-size="21" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">и покрытие окна</text>
+<ellipse cx="1534.0" cy="214.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="1534.0" y="263" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Итог потока:</text>
+<text x="1534.0" y="289" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">OK / PARTIAL / EMPTY</text>
+<ellipse cx="774.0" cy="524.0" rx="24.0" ry="24.0" fill="white" stroke="#193b63" stroke-width="4"/>
+<text x="774.0" y="573" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">Итог потока:</text>
+<text x="774.0" y="599" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" text-anchor="middle" dominant-baseline="middle">UNAVAILABLE</text>
+<text x="45" y="695" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Круг — событие · толстый круг — результат · × — выбор · + — параллельность</text>
+<text x="45" y="725" font-family="DejaVu Sans,sans-serif" font-size="18" fill="#142d4f" dominant-baseline="hanging">Толстый блок — вызываемый подпроцесс · ≡ — последовательная обработка каждой записи</text>
+</svg>
