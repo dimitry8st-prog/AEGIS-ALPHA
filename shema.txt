@@ -1,0 +1,32 @@
+aegis-alpha/
+├── docker/
+│   ├── docker-compose.yml
+│   ├── prometheus/
+│   │   └── prometheus.yml
+│   └── grafana/
+│       └── provisioning/
+├── src/
+│   ├── __init__.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── settings.py
+│   ├── data_pipeline/
+│   │   ├── __init__.py
+│   │   ├── telegram_collector.py
+│   │   ├── market_data.py
+│   │   └── file_processor.py
+│   ├── compliance/
+│   │   ├── __init__.py
+│   │   ├── audit_logger.py
+│   │   └── data_policy.py
+│   └── utils/
+│       ├── __init__.py
+│       └── validators.py
+├── tests/
+│   ├── __init__.py
+│   └── test_data_pipeline.py
+├── requirements.txt
+├── docker-compose.yml
+├── .env.example
+├── .gitlab-ci.yml
+└── README.md

@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aegis-backend
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # ВАЖНО: DATABASE_URL должен быть синхронизирован с POSTGRES_* ниже
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis123}@postgres:5432/${POSTGRES_DB:-aegis}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRATION_HOURS=24
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-100}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      - AUDIT_LOG_RETENTION_DAYS=${AUDIT_LOG_RETENTION_DAYS:-90}
+      - INSTANCE_ID=${INSTANCE_ID:-instance-1}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Для разработки монтируем весь проект внутрь контейнера.
+    # Код виден в /app, при этом точка входа остаётся app.main:app.
+    volumes:
+      - .:/app
+    networks:
+      - aegis-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: aegis-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis123}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      # Проверяем готовность конкретной БД (по умолчанию: aegis)
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aegis} -d ${POSTGRES_DB:-aegis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aegis-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aegis-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aegis-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - aegis-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aegis-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - aegis-network
+    restart: unless-stopped
+
+networks:
+  aegis-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

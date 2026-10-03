@@ -1,0 +1,55 @@
+{
+  "dashboard": {
+    "title": "AEGIS API Metrics",
+    "tags": ["api", "metrics"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP Requests Total",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "http_requests_total",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "HTTP Request Duration",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "http_request_duration_seconds",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "HTTP Errors",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "http_errors_total",
+            "legendFormat": "{{status_code}}"
+          }
+        ]
+      }
+    ],
+    "refresh": "10s"
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+

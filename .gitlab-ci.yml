@@ -1,0 +1,51 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+
+test:
+  stage: test
+  image: python:3.11-slim
+  services:
+    - postgres:15
+    - redis:7-alpine
+  variables:
+    POSTGRES_DB: aegis_test
+    POSTGRES_USER: aegis_user
+    POSTGRES_PASSWORD: test_password
+  before_script:
+    - apt-get update && apt-get install -y gcc g++ libpq-dev
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+  script:
+    - pytest tests/ --cov=src --cov-report=xml
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE .
+    - docker push $DOCKER_IMAGE
+
+deploy:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - apk add --no-cache openssh-client
+    - echo "$DEPLOY_KEY" > deploy_key.pem
+    - chmod 600 deploy_key.pem
+    - ssh -i deploy_key.pem -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST "docker pull $DOCKER_IMAGE && docker-compose up -d"
+  only:
+    - main
