@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*$py.class
 *.so
 .Python
 build/
@@ -37,8 +38,13 @@ env/
 .env
 .env.local
 
-# Docker
+# Docker / local artifacts
 *.log
+migrate.sql
+docs/last-offline-report.json
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Database
 *.db
@@ -47,15 +53,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-
-
-
-
-
-
-
-
-
-
-
-

@@ -27,12 +27,78 @@ Sprint 0, инфраструктура:
 - Prometheus и готовый дашборд Grafana
 - Docker Compose, данные лежат в именованных volumes
 
+## Market data worker (этап 1)
+
+Отдельный процесс `python -m worker` загружает дневные OHLCV (по умолчанию AAPL, MSFT, NVDA), проверяет строки, пишет в PostgreSQL и печатает JSON-отчёт `READY` / `PARTIAL` / `FAILED`. API по-прежнему `uvicorn app.main:app`. Черновик `src/main.py` не запускается вместе с worker.
+
+Правила времени: торговая сессия US equities, часовой пояс `America/New_York`; `quote_time` = календарная дата сессии в 16:00 ET (закрытие регулярной сессии), в БД как `TIMESTAMPTZ`. `received_at` — время получения. `window_end` исключающий (как в yfinance).
+
+Идемпотентность: уникальный ключ `(provider, symbol, exchange, interval, quote_time, adjustment_mode)`. Повтор того же окна не создаёт дубли; исправление источника пишется в `market_quote_revisions`. Невалидные строки — в `market_quote_quarantine` с причиной, без выдуманных цен.
+
+### Миграции
+
+На новой и уже существующей базе Sprint 0 (после `init.sql`, без удаления volumes):
+
+```bash
+# DATABASE_URL=postgresql://USER:PASS@HOST:5432/DB
+alembic upgrade head
+```
+
+Таблицы: `market_quotes`, `market_quote_revisions`, `market_quote_quarantine`, `market_collection_runs`. Таблицы `users`, `items`, `audit_logs` не затрагиваются. Откат: `alembic downgrade -1` (только новые таблицы котировок).
+
+### Запуск сбора
+
+```bash
+# 1) Postgres из Compose
+docker compose up -d postgres
+alembic upgrade head
+
+# 2) Offline (тестовые данные, без Yahoo)
+python -m worker collect \
+  --provider offline \
+  --symbols AAPL,MSFT,NVDA \
+  --start 2024-01-02 \
+  --end 2024-01-06
+
+# 3) Yahoo Finance (исследовательский адаптер yfinance; сеть обязательна)
+python -m worker collect \
+  --provider yfinance \
+  --symbols AAPL,MSFT,NVDA \
+  --start 2024-01-02 \
+  --end 2024-01-06 \
+  --adjustment auto_adjusted
+```
+
+Через Docker Compose (профиль `worker`):
+
+```bash
+docker compose --profile worker run --rm market-data-worker collect \
+  --provider offline \
+  --symbols AAPL,MSFT,NVDA \
+  --start 2024-01-02 \
+  --end 2024-01-06
+```
+
+Перед первым worker-запуском на volume примените миграции (с хоста или одноразовым контейнером с тем же `DATABASE_URL`).
+
+**Проверка контейнерного worker в этой среде:** сервис `postgres` поднят; сборка образа `market-data-worker` не завершена из‑за TLS timeout к Docker Hub (`python:3.11-slim`). Запуск worker через Compose поэтому **не проверен**. Рабочий путь: хостовый `.venv` + Postgres в Docker (см. команды выше). CI на GitHub Actions выполняет offline + PostgreSQL интеграцию.
+
+Пример отчёта: [docs/example-collection-report.json](docs/example-collection-report.json).
+
+### Тесты
+
+```bash
+pytest -q
+```
+
+CI (GitHub Actions) гоняет offline-тесты и интеграцию с PostgreSQL; реальный Yahoo не обязателен.
+
 ## Чего ещё нет
 
-- Рабочий сборщик Telegram и Yahoo Finance внутри запущенного API
-- Аналитическое ядро: FinBERT, корреляции, бэктест
+- Telegram-сборщик и расписание
+- Аналитическое ядро: FinBERT, корреляции, бэктест, торговые сигналы
 - Проверка гипотезы на истории (целевой ориентир обсуждался как accuracy выше 55%)
-- Пакет `src/` не является точкой входа контейнера и в текущем виде не запускается: нет `src/config/settings.py`, нет зависимостей Telethon, yfinance, pandas, pdfplumber в `requirements.txt`, в `src/main.py` не хватает импортов `os`, `datetime`, `timedelta`
+- Пакет `src/` по-прежнему не точка входа контейнера; worker — отдельный пакет `worker/`
 
 ## Архитектура запущенного сервиса
 
@@ -71,6 +137,12 @@ Alembic указан в зависимостях. Каталога миграц�
 │   ├── core/                    # config, db, redis, jwt, rate limit, audit, metrics
 │   ├── models/                  # User, Item, AuditLog
 │   └── schemas/
+├── worker/                      # ручной сбор котировок (отдельный процесс)
+│   ├── adapters/                # offline + yfinance (+ optional Redis cache)
+│   ├── pipeline.py              # fetch → validate → persist → report
+│   └── __main__.py              # python -m worker collect ...
+├── alembic/                     # миграции таблиц котировок
+├── tests/                       # offline + PostgreSQL integration
 ├── src/                         # черновик сборщиков, не подключён к Docker
 │   ├── main.py
 │   ├── data_pipeline/           # telegram, market data, file processor
@@ -302,7 +374,9 @@ Prometheus снимает `http_requests_total`, `http_request_duration_seconds`
 
 ## CI
 
-`.gitlab-ci.yml` описывает три стадии: pytest с Postgres и Redis, сборка Docker-образа в GitLab Registry, выкладка по SSH на `main`. Сейчас стадия тестов не пройдёт: каталога `tests/` нет, покрытие считается по `src`, а рабочие тесты должны смотреть на `app`.
+GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — offline pytest, миграции Alembic и интеграционные тесты worker с PostgreSQL (адаптер `offline`, без Yahoo).
+
+`.gitlab-ci.yml` по-прежнему описывает старый контур GitLab; для market-data используйте GitHub Actions.
 
 ## Дорожная карта
 
