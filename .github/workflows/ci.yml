@@ -49,11 +49,11 @@ jobs:
       - name: Apply Alembic migrations
         run: alembic upgrade head
 
-      - name: Offline unit tests (no Yahoo)
-        run: pytest -q tests/test_validation.py tests/test_cache_contract.py
-
-      - name: Integration tests with PostgreSQL + offline adapter
-        run: pytest -q tests/test_market_data_pipeline.py --cov=worker --cov-report=term-missing
+      - name: Offline + PostgreSQL tests (no live Yahoo)
+        run: |
+          pytest -q tests/ \
+            --cov=worker \
+            --cov-report=term-missing
 
       - name: Worker smoke (offline collect)
         run: |
