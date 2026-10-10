@@ -13,12 +13,19 @@ TRANSIENT_MARKERS = (
     "temporar",
     "connection refused",
     "connection reset",
-    "too many connections",
-    "deadlock",
+    "connection aborted",
+    "connection error",
     "could not connect",
     "server closed the connection",
+    "too many connections",
+    "deadlock",
     "rate limit",
+    "too many requests",
     "429",
+    "503",
+    "502",
+    "504",
+    "temporarily unavailable",
 )
 
 
@@ -29,7 +36,20 @@ class PermanentIOError(Exception):
         super().__init__(message)
 
 
+class TransientIOError(Exception):
+    """Raised for retryable source/DB failures (timeouts, rate limits, etc.)."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
 def is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, TransientIOError):
+        return True
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
+        return True
     text = str(exc).lower()
     return any(m in text for m in TRANSIENT_MARKERS)
 
@@ -45,22 +65,25 @@ async def with_retries(
     attempt = 0
     last_exc: BaseException | None = None
     while attempt < max_attempts:
-        if time.monotonic() >= deadline_monotonic:
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError("DEADLINE_EXCEEDED")
         attempt += 1
+        # Cap this attempt so it cannot overrun the overall run deadline.
+        attempt_timeout = min(operation_timeout, remaining)
         try:
-            return await asyncio.wait_for(operation(), timeout=operation_timeout)
+            return await asyncio.wait_for(operation(), timeout=attempt_timeout)
         except PermanentIOError:
             raise
         except Exception as exc:
             last_exc = exc
             if isinstance(exc, TimeoutError) and str(exc) == "DEADLINE_EXCEEDED":
                 raise
-            if not is_transient(exc) and not isinstance(exc, asyncio.TimeoutError):
+            if not is_transient(exc):
                 raise
-            remaining = deadline_monotonic - time.monotonic()
-            if attempt >= max_attempts or remaining <= wait_seconds:
+            remaining_after = deadline_monotonic - time.monotonic()
+            if attempt >= max_attempts or remaining_after <= wait_seconds:
                 raise
-            await asyncio.sleep(min(wait_seconds, max(0.0, remaining)))
+            await asyncio.sleep(min(wait_seconds, max(0.0, remaining_after)))
     assert last_exc is not None
     raise last_exc

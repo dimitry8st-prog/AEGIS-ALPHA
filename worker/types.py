@@ -25,13 +25,15 @@ class AdjustmentMode(str, Enum):
 class RunStatus(str, Enum):
     """Terminal statuses for a collection run.
 
-    READY — every requested symbol was fetched successfully; every valid bar
-    was confirmed written (inserted/updated/duplicate); no quarantine rows
-    for required symbols; run report persisted.
-    PARTIAL — at least one symbol unavailable/empty-unexpected, or some bars
-    quarantined, or some temporary errors after retries; run report persisted.
-    FAILED — invalid parameters, or the run report / quotes could not be
-    confirmed in the database.
+    READY — every received row was valid; each row's persistence was confirmed
+    (inserted / updated / duplicate already in DB); no quarantine; no source
+    unavailability; run report persisted.
+    PARTIAL — partial success: quarantine, empty window, some symbols
+    unavailable, or some write errors alongside confirmed writes; also when
+    every received row was successfully quarantined.
+    FAILED — all sources unavailable; every quote write failed with nothing
+    confirmed (including quarantine); invalid parameters; or the final run
+    report could not be persisted.
     """
 
     READY = "READY"
@@ -79,6 +81,9 @@ class QuoteBar:
 class FetchResult:
     status: FetchStatus
     bars: list[QuoteBar] = field(default_factory=list)
+    # Rows received from the source that could not be converted to QuoteBar.
+    # Pipeline counts them in `received` and persists them to quarantine.
+    parse_failures: list["QuarantineRow"] = field(default_factory=list)
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     symbol: Optional[str] = None

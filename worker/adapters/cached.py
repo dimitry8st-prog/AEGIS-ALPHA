@@ -7,7 +7,13 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from worker.adapters.base import MarketDataAdapter
-from worker.types import AdjustmentMode, FetchResult, FetchStatus, QuoteBar
+from worker.types import (
+    AdjustmentMode,
+    FetchResult,
+    FetchStatus,
+    QuarantineRow,
+    QuoteBar,
+)
 
 
 class CachedAdapter(MarketDataAdapter):
@@ -63,6 +69,20 @@ def _serialize(result: FetchResult) -> str:
             }
             for b in result.bars
         ],
+        "parse_failures": [
+            {
+                "provider": q.provider,
+                "symbol": q.symbol,
+                "exchange": q.exchange,
+                "interval": q.interval,
+                "quote_time": q.quote_time.isoformat() if q.quote_time else None,
+                "adjustment_mode": q.adjustment_mode,
+                "reason_code": q.reason_code,
+                "reason_detail": q.reason_detail,
+                "payload": q.payload,
+            }
+            for q in result.parse_failures
+        ],
     }
     return json.dumps(payload)
 
@@ -87,9 +107,26 @@ def _deserialize(raw: str | bytes) -> FetchResult:
         )
         for item in data.get("bars", [])
     ]
+    parse_failures = [
+        QuarantineRow(
+            provider=item["provider"],
+            symbol=item["symbol"],
+            exchange=item["exchange"],
+            interval=item["interval"],
+            quote_time=datetime.fromisoformat(item["quote_time"])
+            if item.get("quote_time")
+            else None,
+            adjustment_mode=item.get("adjustment_mode"),
+            reason_code=item["reason_code"],
+            reason_detail=item["reason_detail"],
+            payload=item.get("payload") or {},
+        )
+        for item in data.get("parse_failures", [])
+    ]
     return FetchResult(
         status=FetchStatus(data["status"]),
         bars=bars,
+        parse_failures=parse_failures,
         error_code=data.get("error_code"),
         error_message=data.get("error_message"),
         symbol=data.get("symbol"),

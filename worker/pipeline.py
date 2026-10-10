@@ -9,12 +9,13 @@ from uuid import UUID
 
 from worker.adapters.base import MarketDataAdapter
 from worker.config import WorkerSettings
-from worker.io_retry import with_retries
+from worker.io_retry import PermanentIOError, TransientIOError, with_retries
 from worker.repository import QuoteRepository
 from worker.types import (
     AdjustmentMode,
     FetchStatus,
     PersistCounters,
+    QuarantineRow,
     RunReport,
     RunStatus,
 )
@@ -114,9 +115,6 @@ class MarketDataPipeline:
                 f"cannot create collection run: {exc}"[:500],
             )
 
-        any_source_ok = False
-        any_partial = False
-
         for symbol in symbols:
             try:
                 fetch = await with_retries(
@@ -129,7 +127,13 @@ class MarketDataPipeline:
                     operation_timeout=self.settings.IO_OPERATION_TIMEOUT_SECONDS,
                 )
             except Exception as exc:
-                any_partial = True
+                code = "SOURCE_UNAVAILABLE"
+                if isinstance(exc, PermanentIOError):
+                    code = exc.code
+                elif isinstance(exc, TransientIOError):
+                    code = exc.code
+                elif isinstance(exc, TimeoutError) and str(exc) == "DEADLINE_EXCEEDED":
+                    code = "DEADLINE_EXCEEDED"
                 per_symbol[symbol] = {
                     "status": FetchStatus.UNAVAILABLE.value,
                     "error": str(exc)[:300],
@@ -137,20 +141,21 @@ class MarketDataPipeline:
                 errors.append(
                     {
                         "symbol": symbol,
-                        "code": "SOURCE_UNAVAILABLE",
+                        "code": code,
                         "message": str(exc)[:300],
                     }
                 )
                 continue
 
+            row_count = len(fetch.bars) + len(fetch.parse_failures)
             per_symbol[symbol] = {
                 "status": fetch.status.value,
-                "bars": len(fetch.bars),
+                "bars": row_count,
+                "parse_failures": len(fetch.parse_failures),
                 "error_code": fetch.error_code,
             }
 
             if fetch.status is FetchStatus.UNAVAILABLE:
-                any_partial = True
                 errors.append(
                     {
                         "symbol": symbol,
@@ -161,39 +166,24 @@ class MarketDataPipeline:
                 continue
 
             if fetch.status is FetchStatus.EMPTY:
-                # Valid empty window (holidays / out-of-range) — note, not READY alone.
                 notes.append(
-                    f"{symbol}: source returned 0 bars for [{start.isoformat()}, {end.isoformat()})"
+                    f"{symbol}: source returned 0 bars for "
+                    f"[{start.isoformat()}, {end.isoformat()})"
                 )
-                any_partial = True
-                any_source_ok = True
                 continue
 
-            any_source_ok = True
+            for failure in fetch.parse_failures:
+                await self._persist_quarantine(
+                    failure, run_id, symbol, counters, errors, deadline
+                )
+
             for bar in fetch.bars:
                 counters.received += 1
                 bad = validate_bar(bar)
                 if bad is not None:
-                    try:
-                        await with_retries(
-                            lambda r=bad: self.repo.quarantine(r, run_id),
-                            max_attempts=self.settings.IO_MAX_ATTEMPTS,
-                            wait_seconds=self.settings.IO_RETRY_WAIT_SECONDS,
-                            deadline_monotonic=deadline,
-                            operation_timeout=self.settings.IO_OPERATION_TIMEOUT_SECONDS,
-                        )
-                        counters.quarantined += 1
-                        any_partial = True
-                    except Exception as exc:
-                        counters.failed += 1
-                        any_partial = True
-                        errors.append(
-                            {
-                                "symbol": symbol,
-                                "code": "QUARANTINE_WRITE_FAILED",
-                                "message": str(exc)[:300],
-                            }
-                        )
+                    await self._persist_quarantine(
+                        bad, run_id, symbol, counters, errors, deadline
+                    )
                     continue
 
                 try:
@@ -206,7 +196,6 @@ class MarketDataPipeline:
                     )
                 except Exception as exc:
                     counters.failed += 1
-                    any_partial = True
                     errors.append(
                         {
                             "symbol": symbol,
@@ -225,8 +214,6 @@ class MarketDataPipeline:
 
         finished = datetime.now(timezone.utc)
         status = self._decide_status(
-            any_source_ok=any_source_ok,
-            any_partial=any_partial,
             counters=counters,
             errors=errors,
             symbols=symbols,
@@ -260,6 +247,37 @@ class MarketDataPipeline:
             )
         return report
 
+    async def _persist_quarantine(
+        self,
+        row: QuarantineRow,
+        run_id: UUID,
+        symbol: str,
+        counters: PersistCounters,
+        errors: list[dict[str, Any]],
+        deadline: float,
+    ) -> None:
+        # Parse failures increment received here; validation failures already did.
+        if row.reason_code == "PARSE_ERROR":
+            counters.received += 1
+        try:
+            await with_retries(
+                lambda r=row: self.repo.quarantine(r, run_id),
+                max_attempts=self.settings.IO_MAX_ATTEMPTS,
+                wait_seconds=self.settings.IO_RETRY_WAIT_SECONDS,
+                deadline_monotonic=deadline,
+                operation_timeout=self.settings.IO_OPERATION_TIMEOUT_SECONDS,
+            )
+            counters.quarantined += 1
+        except Exception as exc:
+            counters.failed += 1
+            errors.append(
+                {
+                    "symbol": symbol,
+                    "code": "QUARANTINE_WRITE_FAILED",
+                    "message": str(exc)[:300],
+                }
+            )
+
     async def _upsert_confirmed(self, bar, run_id: UUID) -> str:
         try:
             return await self.repo.upsert_bar(bar, run_id)
@@ -277,39 +295,52 @@ class MarketDataPipeline:
     @staticmethod
     def _decide_status(
         *,
-        any_source_ok: bool,
-        any_partial: bool,
         counters: PersistCounters,
         errors: list[dict[str, Any]],
         symbols: list[str],
         per_symbol: dict[str, dict[str, Any]],
     ) -> RunStatus:
-        all_unavailable = symbols and all(
-            per_symbol.get(s, {}).get("status") == FetchStatus.UNAVAILABLE.value
-            for s in symbols
+        confirmed = counters.inserted + counters.updated + counters.duplicates
+        statuses = [per_symbol.get(s, {}).get("status") for s in symbols]
+        all_unavailable = bool(symbols) and all(
+            st == FetchStatus.UNAVAILABLE.value for st in statuses
         )
-        if all_unavailable or (not any_source_ok and counters.received == 0):
-            if errors and not any_source_ok:
-                return RunStatus.FAILED
-        if counters.failed and counters.inserted == 0 and counters.updated == 0 and counters.duplicates == 0:
-            if not any_source_ok:
-                return RunStatus.FAILED
-        if any_partial or counters.quarantined or counters.failed:
-            return RunStatus.PARTIAL
-        if any_source_ok and (
-            counters.inserted + counters.updated + counters.duplicates > 0
-            or all(
-                per_symbol.get(s, {}).get("status") == FetchStatus.EMPTY.value
-                for s in symbols
-            )
+        if all_unavailable:
+            return RunStatus.FAILED
+
+        # Received rows but nothing confirmed in quotes or quarantine.
+        if (
+            counters.received > 0
+            and confirmed == 0
+            and counters.quarantined == 0
         ):
-            # All EMPTY → PARTIAL (empty explained in notes); mixed OK with saves → READY
-            if all(
-                per_symbol.get(s, {}).get("status") == FetchStatus.EMPTY.value
-                for s in symbols
-            ):
-                return RunStatus.PARTIAL
+            return RunStatus.FAILED
+
+        all_empty = bool(symbols) and all(
+            st == FetchStatus.EMPTY.value for st in statuses
+        )
+        if all_empty:
+            return RunStatus.PARTIAL
+
+        has_unavailable = any(
+            st == FetchStatus.UNAVAILABLE.value for st in statuses
+        )
+        has_empty = any(st == FetchStatus.EMPTY.value for st in statuses)
+
+        if (
+            counters.quarantined
+            or counters.failed
+            or has_unavailable
+            or has_empty
+        ):
+            return RunStatus.PARTIAL
+
+        if confirmed > 0 and confirmed == counters.received:
             return RunStatus.READY
+
+        if confirmed > 0 and counters.quarantined == 0 and counters.failed == 0:
+            return RunStatus.READY
+
         return RunStatus.PARTIAL
 
     def _failed_local(

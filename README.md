@@ -29,11 +29,19 @@ Sprint 0, инфраструктура:
 
 ## Market data worker (этап 1)
 
-Отдельный процесс `python -m worker` загружает дневные OHLCV (по умолчанию AAPL, MSFT, NVDA), проверяет строки, пишет в PostgreSQL и печатает JSON-отчёт `READY` / `PARTIAL` / `FAILED`. API по-прежнему `uvicorn app.main:app`. Черновик `src/main.py` не запускается вместе с worker.
+Отдельный процесс `python -m worker` загружает дневные OHLCV (по умолчанию AAPL, MSFT, NVDA), проверяет строки, пишет в PostgreSQL и печатает JSON-отчёт `READY` / `PARTIAL` / `FAILED`. CLI завершается с ненулевым кодом при `FAILED`. API по-прежнему `uvicorn app.main:app`. Черновик `src/main.py` не запускается вместе с worker.
 
 Правила времени: торговая сессия US equities, часовой пояс `America/New_York`; `quote_time` = календарная дата сессии в 16:00 ET (закрытие регулярной сессии), в БД как `TIMESTAMPTZ`. `received_at` — время получения. `window_end` исключающий (как в yfinance).
 
-Идемпотентность: уникальный ключ `(provider, symbol, exchange, interval, quote_time, adjustment_mode)`. Повтор того же окна не создаёт дубли; исправление источника пишется в `market_quote_revisions`. Невалидные строки — в `market_quote_quarantine` с причиной, без выдуманных цен.
+Идемпотентность: уникальный ключ `(provider, symbol, exchange, interval, quote_time, adjustment_mode)`. Повтор того же окна не создаёт дубли; исправление источника пишется в `market_quote_revisions`. Невалидные и непреобразуемые строки источника — в `market_quote_quarantine` с причиной и исходным payload (включая `NaN`/пропуски), без выдуманных цен. `received` считает все полученные строки; `quarantined` увеличивается только после подтверждённой записи в карантин.
+
+**Статусы отчёта**
+
+| Статус | Когда |
+|---|---|
+| `READY` | Все полученные строки корректны; сохранение каждой подтверждено (`inserted` / `updated` / `duplicates`). |
+| `PARTIAL` | Частичный результат: карантин, пустое окно, недоступные отдельные символы или отдельные ошибки записи. Полный карантин без успешных котировок — тоже `PARTIAL`. |
+| `FAILED` | Все источники недоступны; все попытки записи котировок провалились без подтверждённого результата; либо итоговый отчёт не удалось сохранить. |
 
 ### Миграции
 
@@ -81,7 +89,7 @@ docker compose --profile worker run --rm market-data-worker collect \
 
 Перед первым worker-запуском на volume примените миграции (с хоста или одноразовым контейнером с тем же `DATABASE_URL`).
 
-**Проверка контейнерного worker в этой среде:** сервис `postgres` поднят; сборка образа `market-data-worker` не завершена из‑за TLS timeout к Docker Hub (`python:3.11-slim`). Запуск worker через Compose поэтому **не проверен**. Рабочий путь: хостовый `.venv` + Postgres в Docker (см. команды выше). CI на GitHub Actions выполняет offline + PostgreSQL интеграцию.
+**Проверка контейнерного worker в этой среде:** сервис `postgres` доступен; сборка образа `market-data-worker` прервалась на `apt-get install` (`gcc`, `postgresql-client`) с `ResourceExhausted: cannot allocate memory` (процесс Killed). TLS к реестру при этой попытке не блокировал. Запуск worker через Compose поэтому **не проверен**. Рабочий путь: хостовый `.venv` + Postgres в Docker (см. команды выше). CI на GitHub Actions выполняет offline + PostgreSQL интеграцию.
 
 Пример отчёта: [docs/example-collection-report.json](docs/example-collection-report.json).
 
