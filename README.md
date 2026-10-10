@@ -89,7 +89,9 @@ docker compose --profile worker run --rm market-data-worker collect \
 
 Перед первым worker-запуском на volume примените миграции (с хоста или одноразовым контейнером с тем же `DATABASE_URL`).
 
-**Проверка контейнерного worker в этой среде:** сервис `postgres` доступен; сборка образа `market-data-worker` прервалась на `apt-get install` (`gcc`, `postgresql-client`) с `ResourceExhausted: cannot allocate memory` (процесс Killed). TLS к реестру при этой попытке не блокировал. Запуск worker через Compose поэтому **не проверен**. Рабочий путь: хостовый `.venv` + Postgres в Docker (см. команды выше). CI на GitHub Actions выполняет offline + PostgreSQL интеграцию.
+**Проверка контейнерного worker:** причина OOM при сборке — слой `apt-get install gcc postgresql-client` (тяжёлый toolchain gcc на хосте с ~0.3–0.4 ГБ free RAM). В runtime они не нужны: `psycopg2-binary` / `asyncpg` / wheels для numpy/pandas. Из Dockerfile убраны; pytest* в образ не ставятся. Образ без apt собран и проверен; повторная пересборка с актуальным Dockerfile может упираться в `TLS handshake timeout` к Docker Hub (`python:3.11-slim`) — TLS не отключался.
+
+Compose (offline): первый `collect` → `READY`, `inserted=12`; повтор того же окна → `duplicates=12`, `inserted=0`, в `market_quotes` по-прежнему 12 строк. Volumes не удалялись.
 
 Пример отчёта: [docs/example-collection-report.json](docs/example-collection-report.json).
 
