@@ -1,0 +1,27 @@
+{
+  "run_id": "3f2c1a6e-9b0d-4d2a-8c11-0b7e2f6a9d10",
+  "status": "READY",
+  "provider": "offline",
+  "symbols": ["AAPL", "MSFT", "NVDA"],
+  "interval": "1d",
+  "adjustment_mode": "auto_adjusted",
+  "window_start": "2024-01-02",
+  "window_end": "2024-01-06",
+  "started_at": "2024-01-06T12:00:00+00:00",
+  "finished_at": "2024-01-06T12:00:01+00:00",
+  "counters": {
+    "received": 12,
+    "inserted": 12,
+    "updated": 0,
+    "duplicates": 0,
+    "quarantined": 0,
+    "failed": 0
+  },
+  "per_symbol": {
+    "AAPL": {"status": "OK", "bars": 4, "error_code": null},
+    "MSFT": {"status": "OK", "bars": 4, "error_code": null},
+    "NVDA": {"status": "OK", "bars": 4, "error_code": null}
+  },
+  "errors": [],
+  "notes": []
+}

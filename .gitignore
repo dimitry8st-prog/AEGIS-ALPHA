@@ -37,8 +37,13 @@ env/
 .env
 .env.local
 
-# Docker
+# Docker / local artifacts
 *.log
+migrate.sql
+docs/last-offline-report.json
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Database
 *.db
@@ -47,15 +52,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-
-
-
-
-
-
-
-
-
-
-
-
