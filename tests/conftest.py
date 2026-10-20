@@ -20,6 +20,15 @@ def database_url() -> str:
     return os.environ["DATABASE_URL"]
 
 
+def _database_required(message: str) -> None:
+    """CI must fail when the database or schema is missing. Local runs may skip."""
+    ci = os.environ.get("CI", "").lower() in {"1", "true", "yes"}
+    required = os.environ.get("REQUIRE_DATABASE", "").lower() in {"1", "true", "yes"}
+    if ci or required:
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 @pytest_asyncio.fixture
 async def engine(database_url: str):
     from worker.config import WorkerSettings
@@ -27,13 +36,12 @@ async def engine(database_url: str):
 
     settings = WorkerSettings(DATABASE_URL=database_url)
     eng = create_engine(settings)
-    # Verify connectivity; skip if Postgres not available
     try:
         async with eng.connect() as conn:
             await conn.execute(text("SELECT 1"))
     except Exception as exc:
         await eng.dispose()
-        pytest.skip(f"PostgreSQL unavailable: {exc}")
+        _database_required(f"PostgreSQL unavailable: {exc}")
     yield eng
     await eng.dispose()
 
@@ -50,5 +58,5 @@ async def migrated_engine(engine):
             )
         )
         if not exists.scalar():
-            pytest.skip("market_quotes missing — run alembic upgrade head")
+            _database_required("market_quotes missing — run alembic upgrade head")
     yield engine
