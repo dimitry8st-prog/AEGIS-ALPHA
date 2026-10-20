@@ -1,14 +1,16 @@
 """
 AEGIS Backend Core - Production-Ready API Service
 """
+import asyncio
 from contextlib import asynccontextmanager
+from html import escape
 from fastapi import FastAPI, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
 
 from app.core.config import settings
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import engine, Base, get_db
@@ -19,6 +21,7 @@ from app.core.rate_limiter import RateLimiterMiddleware
 from app.core.audit import AuditMiddleware
 from app.core.logging_config import setup_logging
 from app.api.v1.router import api_router
+from app.core.dependencies import get_current_active_user
 
 # Настройка логирования
 setup_logging(settings.LOG_LEVEL)
@@ -75,34 +78,83 @@ app.include_router(metrics_router, tags=["monitoring"])
 app.include_router(api_router, prefix="/api/v1")
 
 
+DEPENDENCY_TIMEOUT_SECONDS = 2.0
+RESULTS_ITEM_LIMIT = 100
+
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Liveness: the process answers. Dependencies are not checked."""
     return {
         "status": "healthy",
-        "instance_id": settings.INSTANCE_ID
+        "instance_id": settings.INSTANCE_ID,
+        "role": "liveness",
+    }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness of the API process.
+
+    PostgreSQL and Redis are required for the API. The worker's unused quote
+    cache is not part of this check. Failures return 503 and name the
+    dependency only.
+    """
+    unavailable: list[str] = []
+    try:
+        async def ping_db():
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        await asyncio.wait_for(ping_db(), timeout=DEPENDENCY_TIMEOUT_SECONDS)
+    except Exception:
+        unavailable.append("postgres")
+    try:
+        if redis_client._client is None:
+            raise RuntimeError("redis disconnected")
+        await asyncio.wait_for(
+            redis_client.client.ping(),
+            timeout=DEPENDENCY_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        unavailable.append("redis")
+    if unavailable:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "dependencies": unavailable},
+        )
+    return {
+        "status": "ready",
+        "instance_id": settings.INSTANCE_ID,
+        "role": "readiness",
     }
 
 
 @app.get("/results", response_class=HTMLResponse)
-async def results_page(db: AsyncSession = Depends(get_db)):
+async def results_page(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
     """
-    Простая HTML-страница для просмотра результатов (список items).
-    Открыть в браузере: http://localhost:8000/results
+    HTML-страница списка items. Это не просмотр рыночных котировок.
+    Нужен заголовок Authorization: Bearer. Выборка не больше RESULTS_ITEM_LIMIT.
     """
     from app.models.item import Item  # локальный импорт, чтобы избежать циклов
 
-    result = await db.execute(select(Item).order_by(Item.created_at.desc()))
+    result = await db.execute(
+        select(Item).order_by(Item.created_at.desc()).limit(RESULTS_ITEM_LIMIT)
+    )
     items = result.scalars().all()
 
     rows = ""
     for item in items:
+        created = "" if item.created_at is None else str(item.created_at)
         rows += f"""
         <tr>
-            <td>{item.id}</td>
-            <td>{item.title}</td>
-            <td>{(item.description or "")[:200]}</td>
-            <td>{item.created_at}</td>
+            <td>{escape(str(item.id))}</td>
+            <td>{escape(item.title or "")}</td>
+            <td>{escape((item.description or "")[:200])}</td>
+            <td>{escape(created)}</td>
         </tr>
         """
 
@@ -131,7 +183,7 @@ async def results_page(db: AsyncSession = Depends(get_db)):
     <html lang="ru">
     <head>
         <meta charset="UTF-8" />
-        <title>AEGIS – Результаты</title>
+        <title>AEGIS – Items</title>
         <style>
             body {{
                 font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -199,7 +251,7 @@ async def results_page(db: AsyncSession = Depends(get_db)):
     <body>
         <header>
             <h1>AEGIS – Items</h1>
-            <span>Всего записей: {len(items)}</span>
+            <span>Показано items: {len(items)} из не более {RESULTS_ITEM_LIMIT}. Это не котировки. {escape(current_user.email or "")}</span>
         </header>
         <main>
             {main_content}

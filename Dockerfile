@@ -23,9 +23,9 @@ USER appuser
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Healthcheck
+# Liveness only. Readiness is GET /ready and must not restart the container.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+    CMD python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5); raise SystemExit(0 if r.status==200 else 1)"
 
 EXPOSE 8000
 
