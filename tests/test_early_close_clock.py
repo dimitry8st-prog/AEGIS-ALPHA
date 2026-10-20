@@ -134,11 +134,13 @@ async def _revisions(engine):
             await conn.execute(
                 text(
                     """
-                    SELECT quote_id::text AS quote_id,
+                    SELECT id::text AS id,
+                           quote_id::text AS quote_id,
                            to_char(previous_quote_time AT TIME ZONE 'America/New_York', 'HH24:MI') AS previous_et,
                            to_char(quote_time AT TIME ZONE 'America/New_York', 'HH24:MI') AS current_et,
                            previous_close::text AS previous_close
                     FROM market_quote_revisions
+                    ORDER BY id
                     """
                 )
             )
@@ -199,6 +201,74 @@ async def test_existing_pair_keeps_one_quote_and_the_old_close(migrated_engine, 
     assert rows[0]["et"] == "13:00"
     assert legacy_id not in {row["id"] for row in rows}
     assert any(item["previous_et"] == "16:00" and item["quote_id"] == current_id for item in history)
+
+
+async def _insert_prior_revision(engine, quote_id: str, previous_close: Decimal) -> str:
+    revision_id = uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO market_quote_revisions (
+                    id, quote_id, provider, symbol, exchange, interval, quote_time,
+                    adjustment_mode, open, high, low, close, volume,
+                    previous_open, previous_high, previous_low, previous_close, previous_volume,
+                    changed_at
+                ) VALUES (
+                    :id, :quote_id, 'offline', 'AAPL', 'XNAS', '1d', :quote_time,
+                    'auto_adjusted', :open, :high, :low, :close, :volume,
+                    :open, :high, :low, :previous_close, :volume,
+                    CURRENT_TIMESTAMP
+                )
+                """
+            ),
+            {
+                "id": revision_id,
+                "quote_id": quote_id,
+                "quote_time": LEGACY,
+                "open": OPEN,
+                "high": HIGH,
+                "low": LOW,
+                "close": CLOSE,
+                "volume": VOLUME,
+                "previous_close": previous_close,
+            },
+        )
+    return str(revision_id)
+
+
+@pytest.mark.asyncio
+async def test_conflict_keeps_prior_revisions_on_the_surviving_quote(migrated_engine, settings):
+    await _cleanup(migrated_engine)
+    legacy_id = await _insert_legacy(migrated_engine, LEGACY)
+    current_id = await _insert_legacy(migrated_engine, quote_time_for_session(DAY))
+    prior_ids = [
+        await _insert_prior_revision(migrated_engine, legacy_id, Decimal("8.00")),
+        await _insert_prior_revision(migrated_engine, legacy_id, Decimal("9.25")),
+        await _insert_prior_revision(migrated_engine, legacy_id, Decimal("9.75")),
+    ]
+    pipeline = MarketDataPipeline(EarlyCloseAdapter(), QuoteRepository(migrated_engine), settings)
+    window = dict(
+        symbols=["AAPL"],
+        start=DAY,
+        end=date(2024, 7, 4),
+        adjustment_mode=AdjustmentMode.AUTO_ADJUSTED,
+    )
+    first = await pipeline.run(**window)
+    after_first = await _revisions(migrated_engine)
+    second = await pipeline.run(**window)
+    after_second = await _revisions(migrated_engine)
+    rows = await _quotes(migrated_engine)
+
+    assert first.status is RunStatus.READY
+    assert second.counters.duplicates == 1
+    assert [row["id"] for row in rows] == [current_id]
+    kept = [item for item in after_first if Decimal(item["previous_close"]) != CLOSE]
+    assert sorted(item["id"] for item in kept) == sorted(prior_ids)
+    assert {item["quote_id"] for item in after_first} == {current_id}
+    assert legacy_id not in {item["quote_id"] for item in after_first}
+    assert len(after_second) == len(after_first)
+    assert [item["id"] for item in after_second] == [item["id"] for item in after_first]
 
 
 @pytest.mark.asyncio

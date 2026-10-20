@@ -449,10 +449,22 @@ async def _archive_legacy_conflict(
     run_id,
     received_at,
 ) -> None:
-    """Both 13:00 and 16:00 exist. Copy the 16:00 row into history, then remove it.
+    """Both 13:00 and 16:00 exist. Keep the 13:00 row and its history.
 
-    The delete runs only after the revision insert in this transaction.
+    Existing revisions of the 16:00 row move onto the survivor before that
+    row is removed. The delete runs in this same transaction, after the move
+    and after the 16:00 values themselves are copied into a revision.
     """
+    await conn.execute(
+        text(
+            """
+            UPDATE market_quote_revisions
+            SET quote_id = :survivor
+            WHERE quote_id = :legacy
+            """
+        ),
+        {"survivor": survivor_id, "legacy": legacy.id},
+    )
     previous_quote_time = legacy.quote_time
     if previous_quote_time.tzinfo is None:
         previous_quote_time = previous_quote_time.replace(tzinfo=timezone.utc)
