@@ -1,8 +1,14 @@
 """Regular NASDAQ/NYSE cash-session clock for daily bars.
 
-Recurring full holidays follow the weekday rules (Saturday observed on Friday,
-Sunday observed on Monday). One-off closures, including days of mourning, are
-not in this calendar and are not invented.
+Recurring full holidays follow the weekday rules: a Saturday holiday is
+observed on Friday, and a Sunday holiday is observed on Monday. One-off
+closures, including days of mourning, are not in this calendar.
+
+New Year's Day is the Nasdaq exception in Release 34-93675, footnote 9.
+When January 1 falls on Saturday, the holiday is not moved to the preceding
+Friday. That Friday stays a full session and closes at 16:00 America/New_York.
+December 31, 2021 is the published example. A Sunday New Year's Day is still
+observed on the following Monday.
 
 A regular session closes at 16:00 America/New_York. A scheduled early close
 is 13:00 America/New_York. A date that is not a session returns None so the
@@ -76,10 +82,20 @@ def full_holidays(year: int) -> set[date]:
     }
     if year >= 2022:
         days.add(_observed(date(year, 6, 19)))
-    # Jan 1 of the next year can be observed on Dec 31 of this year.
-    observed_next_new_year = _observed(date(year + 1, 1, 1))
-    days.add(observed_next_new_year)
+    # A Saturday New Year's Day is not observed on December 31.
+    # _observed() would return that Friday, so drop any date outside this year.
     return {day for day in days if day.year == year}
+
+
+def legacy_sixteen_close(session_day: date) -> datetime | None:
+    """Prior contract stamped every session at 16:00, including early closes.
+
+    Returns that old instant when ``session_day`` is an early close. Callers
+    use it to retarget an existing row instead of inserting a second key.
+    """
+    if session_close(session_day) != EARLY_CLOSE:
+        return None
+    return datetime.combine(session_day, REGULAR_CLOSE, tzinfo=SESSION_TZ)
 
 
 def is_early_close(day: date) -> bool:

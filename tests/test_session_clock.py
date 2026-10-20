@@ -36,7 +36,17 @@ def test_weekend_holiday_and_observed_new_year():
     assert session_close(date(2024, 7, 4)) is None
     assert session_close(date(2024, 11, 28)) is None
     assert session_close(date(2020, 7, 3)) is None
-    assert session_close(date(2021, 12, 31)) is None
+    # Sunday New Year's Day is observed on Monday.
+    assert session_close(date(2023, 1, 2)) is None
+    assert session_close(date(2017, 1, 2)) is None
+
+
+def test_new_year_saturday_stays_a_full_session():
+    # Nasdaq Release 34-93675 footnote 9: January 1, 2022 was Saturday,
+    # so December 31, 2021 remained a full business day.
+    stamp = quote_time_for_session(date(2021, 12, 31))
+    assert stamp == datetime(2021, 12, 31, 16, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert session_close(date(2010, 12, 31)) == time(16, 0)
 
 
 def test_shortened_sessions_close_at_13_et():
