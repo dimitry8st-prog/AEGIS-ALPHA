@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
+from worker.session_calendar import quote_time_for_session
 from worker.types import (
-    SESSION_TIMEZONE,
     AdjustmentMode,
     FetchResult,
     FetchStatus,
@@ -86,7 +85,6 @@ class OfflineAdapter(MarketDataAdapter):
                 error_message=f"no offline fixture for {sym}",
             )
 
-        tz = ZoneInfo(SESSION_TIMEZONE)
         bars: list[QuoteBar] = []
         for session_day, o, h, l, c, vol in rows:
             if not (start <= session_day < end):
@@ -95,9 +93,11 @@ class OfflineAdapter(MarketDataAdapter):
             if session_day in self.corrupt_bars.get(sym, set()):
                 # Invalid OHLC: high < low
                 h, l = Decimal("1.00"), Decimal("10.00")
-            quote_time = datetime.combine(
-                session_day, time(hour=16, minute=0), tzinfo=tz
-            )
+            quote_time = quote_time_for_session(session_day)
+            if quote_time is None:
+                raise RuntimeError(
+                    f"offline fixture {session_day.isoformat()} is not a session"
+                )
             bars.append(
                 QuoteBar(
                     provider=self.provider_name,

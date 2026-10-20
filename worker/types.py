@@ -11,10 +11,18 @@ from uuid import UUID
 
 
 SESSION_TIMEZONE = "America/New_York"
-# Daily bars are anchored to the regular US equity session calendar date.
-# quote_time is stored as that session date at 16:00 America/New_York
-# (regular session close), then persisted as TIMESTAMPTZ (UTC).
+# quote_time is the official cash close in America/New_York, stored as
+# TIMESTAMPTZ: 16:00 on a regular session and 13:00 on a scheduled early
+# close. Weekend and full-holiday dates are not stored.
+# quote_time is part of the natural key. Rows already stored at 16:00 on an
+# early-close date are not rewritten: a later 13:00 bar would be a new key.
+# There is no migration that changes quote_time.
 DAILY_SESSION_CLOSE_HOUR = 16
+QUOTE_TIME_RULE = (
+    "America/New_York cash close: 16:00 regular session, "
+    "13:00 scheduled early close; non-session dates are not stored. "
+    "One-off closures are outside this calendar."
+)
 
 
 class AdjustmentMode(str, Enum):
