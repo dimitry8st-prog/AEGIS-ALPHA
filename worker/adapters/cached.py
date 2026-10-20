@@ -1,4 +1,9 @@
-"""Optional Redis cache wrapper — same FetchResult on hit and miss."""
+"""Optional Redis wrapper. Not used by `python -m worker collect`.
+
+A hit returns the same FetchResult fields as a miss. Redis errors and corrupt
+payloads fall through to the inner adapter. Do not describe this cache as
+connected until a caller wires it and an end-to-end run checks it.
+"""
 
 from __future__ import annotations
 
@@ -34,14 +39,24 @@ class CachedAdapter(MarketDataAdapter):
         adjustment_mode: AdjustmentMode,
     ) -> FetchResult:
         key = self._key(symbol.upper(), start, end, adjustment_mode)
-        cached = await self.redis.get(key)
+        cached = None
+        try:
+            cached = await self.redis.get(key)
+        except Exception:
+            cached = None
         if cached:
-            return _deserialize(cached)
+            try:
+                return _deserialize(cached)
+            except Exception:
+                cached = None
 
         result = await self.inner.fetch_daily(symbol, start, end, adjustment_mode)
         # Cache successful OK/EMPTY outcomes only (not UNAVAILABLE)
         if result.status in (FetchStatus.OK, FetchStatus.EMPTY):
-            await self.redis.setex(key, self.ttl, _serialize(result))
+            try:
+                await self.redis.setex(key, self.ttl, _serialize(result))
+            except Exception:
+                return result
         return result
 
 

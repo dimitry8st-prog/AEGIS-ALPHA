@@ -1,4 +1,7 @@
-"""CLI: python -m worker collect --symbols AAPL,MSFT,NVDA --start 2024-01-02 --end 2024-01-06 --provider offline"""
+"""CLI: python -m worker collect --symbols AAPL,MSFT,NVDA --start 2024-01-02 --end 2024-01-06 --provider offline
+
+CachedAdapter is not constructed here. Worker Redis is not part of this command.
+"""
 
 from __future__ import annotations
 

@@ -9,7 +9,13 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_active_user
-from app.core.cache import cache_aside, generate_cache_key, delete_from_cache
+from app.core.cache import (
+    cache_aside,
+    generate_cache_key,
+    delete_from_cache,
+    delete_cache_prefix,
+    parse_cached_datetime,
+)
 from app.core.error_handler import NotFoundError
 from app.models.user import User
 from app.models.item import Item
@@ -39,6 +45,8 @@ def deserialize_item(data: str) -> Item:
     item.title = item_data["title"]
     item.description = item_data["description"]
     item.created_by = UUID(item_data["created_by"]) if item_data["created_by"] else None
+    item.created_at = parse_cached_datetime(item_data.get("created_at"))
+    item.updated_at = parse_cached_datetime(item_data.get("updated_at"))
     return item
 
 
@@ -115,8 +123,7 @@ async def create_item(
     await db.commit()
     await db.refresh(new_item)
     
-    # Инвалидируем кэш списка
-    await delete_from_cache("items:list:*")
+    await delete_cache_prefix("items:list:")
     
     return new_item
 
@@ -146,7 +153,7 @@ async def update_item(
     # Инвалидируем кэш
     cache_key = generate_cache_key("item", item_id=str(item_id))
     await delete_from_cache(cache_key)
-    await delete_from_cache("items:list:*")
+    await delete_cache_prefix("items:list:")
     
     return item
 
@@ -170,7 +177,7 @@ async def delete_item(
     # Инвалидируем кэш
     cache_key = generate_cache_key("item", item_id=str(item_id))
     await delete_from_cache(cache_key)
-    await delete_from_cache("items:list:*")
+    await delete_cache_prefix("items:list:")
     
     return None
 

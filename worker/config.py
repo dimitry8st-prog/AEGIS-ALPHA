@@ -15,7 +15,8 @@ class WorkerSettings(BaseSettings):
     IO_OPERATION_TIMEOUT_SECONDS: float = 20.0
     RUN_DEADLINE_SECONDS: float = 900.0
 
-    # Optional Redis — same FetchResult contract on hit/miss when enabled
+    # Reserved. `python -m worker` does not open Redis and does not wrap
+    # adapters in CachedAdapter. API readiness does not speak for this cache.
     REDIS_URL: str | None = None
     MARKET_CACHE_TTL_SECONDS: int = 3600
 
