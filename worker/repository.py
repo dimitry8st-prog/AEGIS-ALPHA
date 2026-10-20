@@ -10,9 +10,11 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from zoneinfo import ZoneInfo
 
 from worker.config import WorkerSettings, sqlalchemy_async_url
-from worker.types import QuarantineRow, QuoteBar, RunReport
+from worker.session_calendar import legacy_sixteen_close
+from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport
 
 
 def create_engine(settings: WorkerSettings) -> AsyncEngine:
@@ -141,13 +143,36 @@ class QuoteRepository:
     async def upsert_bar(self, bar: QuoteBar, run_id: UUID) -> str:
         """Insert or update a bar. Returns inserted|updated|duplicate.
 
-        On uncertain write outcomes, callers should re-check via get_existing.
+        An early-close bar at 13:00 retargets a legacy 16:00 row for the same
+        session instead of inserting a second natural key. The old timestamp
+        is stored in market_quote_revisions first. If both timestamps already
+        exist, the 16:00 row is copied into that history and removed in the
+        same transaction.
         """
         received_at = datetime.now(timezone.utc)
         quote_time = bar.quote_time.astimezone(timezone.utc)
         existing = await self.get_existing(bar)
+        legacy = await self._legacy_early_close(bar)
 
         async with self.engine.begin() as conn:
+            if existing is None and legacy is not None:
+                await _retarget_legacy(
+                    conn, legacy, bar, quote_time, run_id, received_at
+                )
+                return "updated"
+
+            if existing is not None and legacy is not None:
+                await _archive_legacy_conflict(
+                    conn,
+                    existing[0],
+                    existing[1:],
+                    legacy,
+                    bar,
+                    quote_time,
+                    run_id,
+                    received_at,
+                )
+
             if existing is None:
                 await conn.execute(
                     text(
@@ -187,47 +212,17 @@ class QuoteRepository:
 
             quote_id, o, h, l, c, v = existing
             if (o, h, l, c, v) == bar.ohlcv_tuple():
-                return "duplicate"
+                return "updated" if legacy is not None else "duplicate"
 
-            # Revision history before overwrite
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO market_quote_revisions (
-                        id, quote_id, provider, symbol, exchange, interval, quote_time,
-                        adjustment_mode, open, high, low, close, volume,
-                        previous_open, previous_high, previous_low, previous_close, previous_volume,
-                        run_id, changed_at
-                    ) VALUES (
-                        :id, :quote_id, :provider, :symbol, :exchange, :interval, :quote_time,
-                        :adjustment_mode, :open, :high, :low, :close, :volume,
-                        :previous_open, :previous_high, :previous_low, :previous_close, :previous_volume,
-                        :run_id, :changed_at
-                    )
-                    """
-                ),
-                {
-                    "id": uuid4(),
-                    "quote_id": quote_id,
-                    "provider": bar.provider,
-                    "symbol": bar.symbol,
-                    "exchange": bar.exchange,
-                    "interval": bar.interval,
-                    "quote_time": quote_time,
-                    "adjustment_mode": bar.adjustment_mode.value,
-                    "open": bar.open,
-                    "high": bar.high,
-                    "low": bar.low,
-                    "close": bar.close,
-                    "volume": bar.volume,
-                    "previous_open": o,
-                    "previous_high": h,
-                    "previous_low": l,
-                    "previous_close": c,
-                    "previous_volume": v,
-                    "run_id": run_id,
-                    "changed_at": received_at,
-                },
+            await _insert_revision(
+                conn,
+                quote_id=quote_id,
+                bar=bar,
+                quote_time=quote_time,
+                previous_quote_time=None,
+                previous=(o, h, l, c, v),
+                run_id=run_id,
+                changed_at=received_at,
             )
             await conn.execute(
                 text(
@@ -258,6 +253,42 @@ class QuoteRepository:
                 },
             )
             return "updated"
+
+    async def _legacy_early_close(self, bar: QuoteBar):
+        local = bar.quote_time.astimezone(ZoneInfo(SESSION_TIMEZONE))
+        if (local.hour, local.minute, local.second) != (13, 0, 0):
+            return None
+        legacy_time = legacy_sixteen_close(local.date())
+        if legacy_time is None:
+            return None
+        async with self.engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id, quote_time, open, high, low, close, volume
+                        FROM market_quotes
+                        WHERE provider = :provider
+                          AND symbol = :symbol
+                          AND exchange = :exchange
+                          AND interval = :interval
+                          AND quote_time = :quote_time
+                          AND adjustment_mode = :adjustment_mode
+                        """
+                    ),
+                    {
+                        "provider": bar.provider,
+                        "symbol": bar.symbol,
+                        "exchange": bar.exchange,
+                        "interval": bar.interval,
+                        "quote_time": legacy_time.astimezone(timezone.utc),
+                        "adjustment_mode": bar.adjustment_mode.value,
+                    },
+                )
+            ).first()
+        if row is None:
+            return None
+        return row
 
     async def quarantine(self, row: QuarantineRow, run_id: UUID) -> None:
         async with self.engine.begin() as conn:
@@ -291,6 +322,155 @@ class QuoteRepository:
                     "received_at": datetime.now(timezone.utc),
                 },
             )
+
+
+def _ohlcv(row) -> tuple:
+    return (
+        Decimal(str(row.open)),
+        Decimal(str(row.high)),
+        Decimal(str(row.low)),
+        Decimal(str(row.close)),
+        int(row.volume),
+    )
+
+
+async def _insert_revision(
+    conn,
+    *,
+    quote_id: UUID,
+    bar: QuoteBar,
+    quote_time: datetime,
+    previous_quote_time: datetime | None,
+    previous: tuple,
+    run_id: UUID,
+    changed_at: datetime,
+    current: tuple | None = None,
+) -> None:
+    new_open, new_high, new_low, new_close, new_volume = (
+        bar.ohlcv_tuple() if current is None else current
+    )
+    o, h, l, c, v = previous
+    await conn.execute(
+        text(
+            """
+            INSERT INTO market_quote_revisions (
+                id, quote_id, provider, symbol, exchange, interval, quote_time,
+                previous_quote_time, adjustment_mode, open, high, low, close, volume,
+                previous_open, previous_high, previous_low, previous_close, previous_volume,
+                run_id, changed_at
+            ) VALUES (
+                :id, :quote_id, :provider, :symbol, :exchange, :interval, :quote_time,
+                :previous_quote_time, :adjustment_mode, :open, :high, :low, :close, :volume,
+                :previous_open, :previous_high, :previous_low, :previous_close, :previous_volume,
+                :run_id, :changed_at
+            )
+            """
+        ),
+        {
+            "id": uuid4(),
+            "quote_id": quote_id,
+            "provider": bar.provider,
+            "symbol": bar.symbol,
+            "exchange": bar.exchange,
+            "interval": bar.interval,
+            "quote_time": quote_time,
+            "previous_quote_time": previous_quote_time,
+            "adjustment_mode": bar.adjustment_mode.value,
+            "open": new_open,
+            "high": new_high,
+            "low": new_low,
+            "close": new_close,
+            "volume": new_volume,
+            "previous_open": o,
+            "previous_high": h,
+            "previous_low": l,
+            "previous_close": c,
+            "previous_volume": v,
+            "run_id": run_id,
+            "changed_at": changed_at,
+        },
+    )
+
+
+async def _retarget_legacy(conn, legacy, bar: QuoteBar, quote_time, run_id, received_at) -> None:
+    """Move the 16:00 row onto 13:00. History keeps the old timestamp."""
+    previous_quote_time = legacy.quote_time
+    if previous_quote_time.tzinfo is None:
+        previous_quote_time = previous_quote_time.replace(tzinfo=timezone.utc)
+    await _insert_revision(
+        conn,
+        quote_id=legacy.id,
+        bar=bar,
+        quote_time=quote_time,
+        previous_quote_time=previous_quote_time.astimezone(timezone.utc),
+        previous=_ohlcv(legacy),
+        run_id=run_id,
+        changed_at=received_at,
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE market_quotes SET
+                quote_time = :quote_time,
+                open = :open,
+                high = :high,
+                low = :low,
+                close = :close,
+                volume = :volume,
+                received_at = :received_at,
+                run_id = :run_id,
+                payload_hash = :payload_hash,
+                updated_at = :received_at
+            WHERE id = :id
+            """
+        ),
+        {
+            "id": legacy.id,
+            "quote_time": quote_time,
+            "open": bar.open,
+            "high": bar.high,
+            "low": bar.low,
+            "close": bar.close,
+            "volume": bar.volume,
+            "received_at": received_at,
+            "run_id": run_id,
+            "payload_hash": _payload_hash(bar),
+        },
+    )
+
+
+async def _archive_legacy_conflict(
+    conn,
+    survivor_id,
+    survivor_ohlcv,
+    legacy,
+    bar: QuoteBar,
+    quote_time,
+    run_id,
+    received_at,
+) -> None:
+    """Both 13:00 and 16:00 exist. Copy the 16:00 row into history, then remove it.
+
+    The delete runs only after the revision insert in this transaction.
+    """
+    previous_quote_time = legacy.quote_time
+    if previous_quote_time.tzinfo is None:
+        previous_quote_time = previous_quote_time.replace(tzinfo=timezone.utc)
+    await _insert_revision(
+        conn,
+        quote_id=survivor_id,
+        bar=bar,
+        quote_time=quote_time,
+        previous_quote_time=previous_quote_time.astimezone(timezone.utc),
+        previous=_ohlcv(legacy),
+        current=tuple(survivor_ohlcv),
+        run_id=run_id,
+        changed_at=received_at,
+    )
+    await conn.execute(
+        text("DELETE FROM market_quotes WHERE id = :id"),
+        {"id": legacy.id},
+    )
 
 
 def _payload_hash(bar: QuoteBar) -> str:

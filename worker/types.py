@@ -14,9 +14,11 @@ SESSION_TIMEZONE = "America/New_York"
 # quote_time is the official cash close in America/New_York, stored as
 # TIMESTAMPTZ: 16:00 on a regular session and 13:00 on a scheduled early
 # close. Weekend and full-holiday dates are not stored.
-# quote_time is part of the natural key. Rows already stored at 16:00 on an
-# early-close date are not rewritten: a later 13:00 bar would be a new key.
-# There is no migration that changes quote_time.
+# quote_time is part of the natural key. An early-close row stored by the
+# previous contract at 16:00 is moved to 13:00 in place. The previous
+# timestamp and OHLCV are written to market_quote_revisions first. A second
+# row is not inserted. If both timestamps already exist, the 16:00 row is
+# copied into that history and removed in the same transaction.
 DAILY_SESSION_CLOSE_HOUR = 16
 QUOTE_TIME_RULE = (
     "America/New_York cash close: 16:00 regular session, "
