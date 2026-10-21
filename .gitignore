@@ -49,6 +49,9 @@ htmlcov/
 *.db
 *.sqlite
 
+# Research dataset snapshots created by `python -m worker export`
+datasets/
+
 # OS
 .DS_Store
 Thumbs.db
