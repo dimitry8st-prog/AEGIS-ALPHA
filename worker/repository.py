@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from dataclasses import replace
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -15,26 +14,7 @@ from zoneinfo import ZoneInfo
 
 from worker.config import WorkerSettings, sqlalchemy_async_url
 from worker.session_calendar import legacy_sixteen_close
-from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport
-
-
-_PRICE_SCALE = Decimal("0.00000001")
-
-
-def _stored_price(value: Decimal) -> Decimal:
-    """Match market_quotes Numeric(20, 8), half away from zero."""
-    return Decimal(value).quantize(_PRICE_SCALE, rounding=ROUND_HALF_UP)
-
-
-def _at_storage_scale(bar: QuoteBar) -> QuoteBar:
-    return replace(
-        bar,
-        open=_stored_price(bar.open),
-        high=_stored_price(bar.high),
-        low=_stored_price(bar.low),
-        close=_stored_price(bar.close),
-        volume=int(bar.volume),
-    )
+from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport, stored_ohlcv
 
 
 def create_engine(settings: WorkerSettings) -> AsyncEngine:
@@ -151,14 +131,10 @@ class QuoteRepository:
             ).first()
         if row is None:
             return None
-        return (
-            row.id,
-            Decimal(str(row.open)),
-            Decimal(str(row.high)),
-            Decimal(str(row.low)),
-            Decimal(str(row.close)),
-            int(row.volume),
+        open_, high, low, close, volume = stored_ohlcv(
+            row.open, row.high, row.low, row.close, row.volume
         )
+        return (row.id, open_, high, low, close, volume)
 
     async def upsert_bar(self, bar: QuoteBar, run_id: UUID) -> str:
         """Insert or update a bar. Returns inserted|updated|duplicate.
@@ -169,7 +145,7 @@ class QuoteRepository:
         exist, the 16:00 row is copied into that history and removed in the
         same transaction.
         """
-        bar = _at_storage_scale(bar)
+        bar = bar.at_storage_scale()
         received_at = datetime.now(timezone.utc)
         quote_time = bar.quote_time.astimezone(timezone.utc)
         existing = await self.get_existing(bar)

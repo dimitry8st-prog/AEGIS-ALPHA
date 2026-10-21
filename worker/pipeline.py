@@ -18,6 +18,7 @@ from worker.types import (
     QuarantineRow,
     RunReport,
     RunStatus,
+    stored_ohlcv,
 )
 from worker.validation import validate_bar
 
@@ -287,7 +288,9 @@ class MarketDataPipeline:
             if existing is None:
                 raise
             _id, o, h, l, c, v = existing
-            if (o, h, l, c, v) == bar.ohlcv_tuple():
+            if stored_ohlcv(o, h, l, c, v) == stored_ohlcv(
+                bar.open, bar.high, bar.low, bar.close, bar.volume
+            ):
                 return "duplicate"
             # Data present but different — treat as needing update retry
             raise exc

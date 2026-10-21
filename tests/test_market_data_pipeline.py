@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -82,6 +83,121 @@ async def test_repeat_of_full_precision_price_is_a_duplicate(migrated_engine, se
     assert second.counters.updated == 0
     assert await _count(migrated_engine, "market_quotes") == 1
     assert await _count(migrated_engine, "market_quote_revisions") == 0
+
+
+class _TimeoutAfterCommit(QuoteRepository):
+    async def upsert_bar(self, bar, run_id):
+        await super().upsert_bar(bar, run_id)
+        raise TimeoutError("confirmation lost")
+
+
+class _TimeoutWithoutWrite(QuoteRepository):
+    async def upsert_bar(self, bar, run_id):
+        raise TimeoutError("confirmation lost")
+
+
+def _window():
+    return dict(
+        symbols=["AAPL"],
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        adjustment_mode=AdjustmentMode.RAW,
+    )
+
+
+async def _close_text(engine) -> str:
+    async with engine.connect() as conn:
+        value = (
+            await conn.execute(text("SELECT close::text FROM market_quotes"))
+        ).scalar_one()
+    return value
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_stored_write_is_confirmed(migrated_engine, settings):
+    await _cleanup(migrated_engine)
+    repo = _TimeoutAfterCommit(migrated_engine)
+    report = await MarketDataPipeline(_PreciseAdapter(), repo, settings).run(**_window())
+    assert report.status is RunStatus.READY
+    assert report.counters.failed == 0
+    assert report.counters.duplicates == 1
+    assert report.counters.inserted == 0
+    assert await _close_text(migrated_engine) == "185.63999939"
+    assert await _count(migrated_engine, "market_quotes") == 1
+    assert await _count(migrated_engine, "market_quote_revisions") == 0
+
+    again = await MarketDataPipeline(
+        _PreciseAdapter(), QuoteRepository(migrated_engine), settings
+    ).run(**_window())
+    assert again.counters.duplicates == 1
+    assert again.counters.updated == 0
+    assert await _count(migrated_engine, "market_quotes") == 1
+    assert await _count(migrated_engine, "market_quote_revisions") == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_does_not_confirm_a_different_stored_price(migrated_engine, settings):
+    await _cleanup(migrated_engine)
+    seeded = await MarketDataPipeline(
+        _PreciseAdapter(), QuoteRepository(migrated_engine), settings
+    ).run(**_window())
+    assert seeded.counters.inserted == 1
+
+    class _OtherPrice(_PreciseAdapter):
+        def __init__(self):
+            super().__init__()
+            self._bar = replace(self._bar, close=Decimal("186.50000000"))
+
+    report = await MarketDataPipeline(
+        _OtherPrice(), _TimeoutWithoutWrite(migrated_engine), settings
+    ).run(**_window())
+    assert report.counters.duplicates == 0
+    assert report.counters.updated == 0
+    assert report.counters.failed == 1
+    assert report.status is RunStatus.FAILED
+    assert await _close_text(migrated_engine) == "185.63999939"
+    assert await _count(migrated_engine, "market_quote_revisions") == 0
+
+
+@pytest.mark.asyncio
+async def test_real_adjusted_change_is_still_a_revision(migrated_engine, settings):
+    await _cleanup(migrated_engine)
+    original = replace(
+        _PreciseAdapter()._bar, adjustment_mode=AdjustmentMode.AUTO_ADJUSTED
+    )
+    changed = replace(original, close=Decimal("186.00000000"))
+
+    class _Bars:
+        provider_name = "offline"
+
+        def __init__(self, bar):
+            self._bar = bar
+
+        async def fetch_daily(self, symbol, start, end, adjustment_mode):
+            from worker.types import FetchResult, FetchStatus
+
+            return FetchResult(status=FetchStatus.OK, symbol=symbol, bars=[self._bar])
+
+    first = await MarketDataPipeline(
+        _Bars(original), QuoteRepository(migrated_engine), settings
+    ).run(**{**_window(), "adjustment_mode": AdjustmentMode.AUTO_ADJUSTED})
+
+    class _Changed:
+        provider_name = "offline"
+
+        async def fetch_daily(self, symbol, start, end, adjustment_mode):
+            from worker.types import FetchResult, FetchStatus
+
+            return FetchResult(status=FetchStatus.OK, symbol=symbol, bars=[changed])
+
+    second = await MarketDataPipeline(
+        _Changed(), QuoteRepository(migrated_engine), settings
+    ).run(**{**_window(), "adjustment_mode": AdjustmentMode.AUTO_ADJUSTED})
+    assert first.counters.inserted == 1
+    assert second.counters.updated == 1
+    assert second.counters.duplicates == 0
+    assert await _count(migrated_engine, "market_quotes") == 1
+    assert await _count(migrated_engine, "market_quote_revisions") == 1
 
 
 @pytest.mark.asyncio

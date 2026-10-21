@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -20,6 +20,30 @@ SESSION_TIMEZONE = "America/New_York"
 # row is not inserted. If both timestamps already exist, the 16:00 row is
 # copied into that history and removed in the same transaction.
 DAILY_SESSION_CLOSE_HOUR = 16
+# market_quotes stores OHLC as Numeric(20, 8). Half away from zero matches PostgreSQL numeric.
+PRICE_SCALE = Decimal("0.00000001")
+
+
+def stored_price(value: Decimal | int | str) -> Decimal:
+    return Decimal(str(value)).quantize(PRICE_SCALE, rounding=ROUND_HALF_UP)
+
+
+def stored_ohlcv(
+    open_: Decimal | int | str,
+    high: Decimal | int | str,
+    low: Decimal | int | str,
+    close: Decimal | int | str,
+    volume: int,
+) -> tuple[Decimal, Decimal, Decimal, Decimal, int]:
+    return (
+        stored_price(open_),
+        stored_price(high),
+        stored_price(low),
+        stored_price(close),
+        int(volume),
+    )
+
+
 QUOTE_TIME_RULE = (
     "America/New_York cash close: 16:00 regular session, "
     "13:00 scheduled early close; non-session dates are not stored. "
@@ -85,6 +109,19 @@ class QuoteBar:
 
     def ohlcv_tuple(self) -> tuple:
         return (self.open, self.high, self.low, self.close, self.volume)
+
+    def at_storage_scale(self) -> "QuoteBar":
+        open_, high, low, close, volume = stored_ohlcv(
+            self.open, self.high, self.low, self.close, self.volume
+        )
+        return replace(
+            self,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
 
 
 @dataclass
