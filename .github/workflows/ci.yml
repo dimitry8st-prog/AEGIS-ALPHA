@@ -27,6 +27,7 @@ jobs:
       DATABASE_URL: postgresql://aegis:aegis123@localhost:5432/aegis
       JWT_SECRET_KEY: ci-test-secret
       IO_RETRY_WAIT_SECONDS: "0.05"
+      REQUIRE_DATABASE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -55,11 +56,43 @@ jobs:
             --cov=worker \
             --cov-report=term-missing
 
-      - name: Worker smoke (offline collect)
+      - name: Worker smoke (offline collect and idempotent repeat)
         run: |
+          python - <<'PY'
+          import asyncio
+          from sqlalchemy import text
+          from worker.config import WorkerSettings
+          from worker.repository import create_engine
+
+          async def clean():
+              engine = create_engine(WorkerSettings())
+              async with engine.begin() as conn:
+                  await conn.execute(text("DELETE FROM market_quote_revisions"))
+                  await conn.execute(text("DELETE FROM market_quote_quarantine"))
+                  await conn.execute(text("DELETE FROM market_quotes"))
+                  await conn.execute(text("DELETE FROM market_collection_runs"))
+              await engine.dispose()
+
+          asyncio.run(clean())
+          PY
           python -m worker collect \
             --provider offline \
             --symbols AAPL,MSFT,NVDA \
             --start 2024-01-02 \
-            --end 2024-01-06 > /tmp/report.json
-          python -c "import json; r=json.load(open('/tmp/report.json')); assert r['status']=='READY'; print(r['status'], r['counters'])"
+            --end 2024-01-06 > /tmp/first.json
+          python -m worker collect \
+            --provider offline \
+            --symbols AAPL,MSFT,NVDA \
+            --start 2024-01-02 \
+            --end 2024-01-06 > /tmp/second.json
+          python - <<'PY'
+          import json
+          first = json.load(open("/tmp/first.json"))
+          second = json.load(open("/tmp/second.json"))
+          assert first["status"] == "READY", first
+          assert first["counters"]["inserted"] == 12, first["counters"]
+          assert second["status"] == "READY", second
+          assert second["counters"]["inserted"] == 0, second["counters"]
+          assert second["counters"]["duplicates"] == 12, second["counters"]
+          print(first["status"], first["counters"], second["counters"])
+          PY

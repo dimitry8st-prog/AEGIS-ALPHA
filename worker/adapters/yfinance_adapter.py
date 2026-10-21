@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import math
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from worker.adapters.base import MarketDataAdapter
+from worker.instruments import UnsupportedInstrument, require_xnas
 from worker.io_retry import PermanentIOError, TransientIOError
+from worker.session_calendar import quote_time_for_session
 from worker.types import (
     SESSION_TIMEZONE,
     AdjustmentMode,
@@ -116,6 +118,7 @@ def _row_payload(
         "interval": "1d",
         "index": _json_safe(idx),
         "quote_time": quote_time.isoformat() if quote_time else None,
+        "session_close": None if quote_time is None else quote_time.isoformat(),
         "Open": _json_safe(_raw_cell(row, "Open")),
         "High": _json_safe(_raw_cell(row, "High")),
         "Low": _json_safe(_raw_cell(row, "Low")),
@@ -159,9 +162,13 @@ def _download_sync(
     auto_adjust: bool,
 ):
     import yfinance as yf
+    from yfinance import shared
 
+    # A previous call in this process must not leak into an empty frame.
+    shared._ERRORS.clear()
     # Official yfinance docs: start inclusive, end exclusive; interval 1d.
-    return yf.download(
+    # 0.2.49 accepts multi_level_index; 0.2.40 does not.
+    frame = yf.download(
         tickers=symbol,
         start=start.isoformat(),
         end=end.isoformat(),
@@ -172,6 +179,10 @@ def _download_sync(
         group_by="column",
         multi_level_index=False,
     )
+    if shared._ERRORS:
+        detail = "; ".join(f"{name}: {message}" for name, message in shared._ERRORS.items())
+        raise TransientIOError("SOURCE_TRANSIENT", detail[:500])
+    return frame
 
 
 class YFinanceAdapter(MarketDataAdapter):
@@ -184,7 +195,13 @@ class YFinanceAdapter(MarketDataAdapter):
         end: date,
         adjustment_mode: AdjustmentMode,
     ) -> FetchResult:
-        sym = symbol.upper()
+        try:
+            sym = require_xnas(symbol)
+        except UnsupportedInstrument as exc:
+            raise PermanentIOError(
+                "UNSUPPORTED_INSTRUMENT",
+                f"{exc.symbol} is outside the XNAS research allowlist",
+            ) from exc
         auto_adjust = adjustment_mode is AdjustmentMode.AUTO_ADJUSTED
         try:
             frame = await asyncio.to_thread(
@@ -212,7 +229,9 @@ class YFinanceAdapter(MarketDataAdapter):
             quote_time: datetime | None = None
             try:
                 session_day = _session_day_from_index(idx, tz)
-                quote_time = datetime.combine(session_day, time(16, 0), tzinfo=tz)
+                quote_time = quote_time_for_session(session_day)
+                if quote_time is None:
+                    raise ValueError(f"not a NASDAQ session: {session_day.isoformat()}")
                 bar = QuoteBar(
                     provider=self.provider_name,
                     symbol=sym,
@@ -228,6 +247,11 @@ class YFinanceAdapter(MarketDataAdapter):
                 )
                 bars.append(bar)
             except (KeyError, InvalidOperation, ValueError, TypeError, OverflowError) as exc:
+                reason = (
+                    "UNSUPPORTED_SESSION"
+                    if isinstance(exc, ValueError) and str(exc).startswith("not a NASDAQ session")
+                    else "PARSE_ERROR"
+                )
                 payload = _row_payload(
                     symbol=sym,
                     idx=idx,
@@ -243,7 +267,7 @@ class YFinanceAdapter(MarketDataAdapter):
                         interval="1d",
                         quote_time=quote_time,
                         adjustment_mode=adjustment_mode.value,
-                        reason_code="PARSE_ERROR",
+                        reason_code=reason,
                         reason_detail=f"{type(exc).__name__}: {exc}"[:500],
                         payload=payload,
                     )

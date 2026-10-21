@@ -11,10 +11,20 @@ from uuid import UUID
 
 
 SESSION_TIMEZONE = "America/New_York"
-# Daily bars are anchored to the regular US equity session calendar date.
-# quote_time is stored as that session date at 16:00 America/New_York
-# (regular session close), then persisted as TIMESTAMPTZ (UTC).
+# quote_time is the official cash close in America/New_York, stored as
+# TIMESTAMPTZ: 16:00 on a regular session and 13:00 on a scheduled early
+# close. Weekend and full-holiday dates are not stored.
+# quote_time is part of the natural key. An early-close row stored by the
+# previous contract at 16:00 is moved to 13:00 in place. The previous
+# timestamp and OHLCV are written to market_quote_revisions first. A second
+# row is not inserted. If both timestamps already exist, the 16:00 row is
+# copied into that history and removed in the same transaction.
 DAILY_SESSION_CLOSE_HOUR = 16
+QUOTE_TIME_RULE = (
+    "America/New_York cash close: 16:00 regular session, "
+    "13:00 scheduled early close; non-session dates are not stored. "
+    "One-off closures are outside this calendar."
+)
 
 
 class AdjustmentMode(str, Enum):

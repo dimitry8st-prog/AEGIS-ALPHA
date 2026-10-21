@@ -1,6 +1,11 @@
 """
 Cache utilities - Cache-Aside pattern
+
+Redis is optional for reads. A failed get, a failed deserialize, or a failed
+write falls through to the caller-supplied source. Invalidation uses SCAN,
+not the blocking KEYS command.
 """
+from datetime import datetime
 from typing import Optional, TypeVar, Callable, Any
 import json
 from app.core.redis_client import redis_client
@@ -30,11 +35,37 @@ async def set_to_cache(key: str, value: str, ttl: int = 3600):
 
 
 async def delete_from_cache(key: str):
-    """Удаление значения из кэша"""
+    """Удаление одного литерального ключа. Шаблон `items:list:*` так не работает."""
     try:
         await redis_client.client.delete(key)
     except Exception as e:
         logger.warning("Cache delete failed", key=key, error=str(e))
+
+
+async def delete_cache_prefix(prefix: str) -> None:
+    """Удалить ключи по префиксу через SCAN. Сбой Redis не прерывает запись в БД."""
+    pattern = prefix if prefix.endswith("*") else f"{prefix}*"
+    try:
+        client = redis_client.client
+        batch: list[str] = []
+        async for key in client.scan_iter(match=pattern, count=200):
+            batch.append(key)
+            if len(batch) >= 200:
+                await client.delete(*batch)
+                batch = []
+        if batch:
+            await client.delete(*batch)
+    except Exception as e:
+        logger.warning("Cache prefix delete failed", prefix=prefix, error=str(e))
+
+
+def parse_cached_datetime(value) -> datetime:
+    """Восстановить момент из кэша. Пустое значение — повреждённая запись."""
+    if isinstance(value, datetime):
+        return value
+    if value is None or value == "":
+        raise ValueError("cached datetime is missing")
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 async def cache_aside(

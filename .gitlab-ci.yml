@@ -11,22 +11,40 @@ test:
   image: python:3.11-slim
   services:
     - postgres:15
-    - redis:7-alpine
   variables:
     POSTGRES_DB: aegis_test
     POSTGRES_USER: aegis_user
     POSTGRES_PASSWORD: test_password
+    POSTGRES_HOST_AUTH_METHOD: trust
+    DATABASE_URL: postgresql://aegis_user:test_password@postgres:5432/aegis_test
+    JWT_SECRET_KEY: ci-test-secret
+    REQUIRE_DATABASE: "1"
+    IO_RETRY_WAIT_SECONDS: "0.05"
   before_script:
-    - apt-get update && apt-get install -y gcc g++ libpq-dev
     - pip install --upgrade pip
     - pip install -r requirements.txt
+    - python - <<'PY'
+      import os, time
+      import psycopg2
+      from pathlib import Path
+      last = None
+      for _ in range(30):
+          try:
+              conn = psycopg2.connect(os.environ["DATABASE_URL"])
+              conn.autocommit = True
+              cur = conn.cursor()
+              cur.execute(Path("init.sql").read_text())
+              conn.close()
+              break
+          except Exception as exc:
+              last = exc
+              time.sleep(1)
+      else:
+          raise SystemExit(f"postgres not ready: {last}")
+      PY
+    - alembic upgrade head
   script:
-    - pytest tests/ --cov=src --cov-report=xml
-  artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
+    - pytest -q tests/
 
 build:
   stage: build

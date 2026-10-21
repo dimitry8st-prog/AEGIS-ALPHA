@@ -9,7 +9,13 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_admin_user
-from app.core.cache import cache_aside, generate_cache_key, delete_from_cache
+from app.core.cache import (
+    cache_aside,
+    generate_cache_key,
+    delete_from_cache,
+    delete_cache_prefix,
+    parse_cached_datetime,
+)
 from app.core.error_handler import NotFoundError
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
@@ -39,7 +45,8 @@ def deserialize_user(data: str) -> User:
     user.email = user_data["email"]
     user.role = user_data["role"]
     user.is_active = user_data["is_active"]
-    # created_at и updated_at можно пропустить для простоты
+    user.created_at = parse_cached_datetime(user_data.get("created_at"))
+    user.updated_at = parse_cached_datetime(user_data.get("updated_at"))
     return user
 
 
@@ -124,7 +131,7 @@ async def update_user(
     # Инвалидируем кэш
     cache_key = generate_cache_key("user", user_id=str(user_id))
     await delete_from_cache(cache_key)
-    await delete_from_cache("users:list:*")  # Инвалидируем список
+    await delete_cache_prefix("users:list:")
     
     return user
 
@@ -148,7 +155,7 @@ async def delete_user(
     # Инвалидируем кэш
     cache_key = generate_cache_key("user", user_id=str(user_id))
     await delete_from_cache(cache_key)
-    await delete_from_cache("users:list:*")
+    await delete_cache_prefix("users:list:")
     
     return None
 

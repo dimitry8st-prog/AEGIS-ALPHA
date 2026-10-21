@@ -100,7 +100,7 @@ class MarketDataPipeline:
                     "interval": interval,
                     "adjustment_mode": adjustment_mode.value,
                     "session_timezone": "America/New_York",
-                    "quote_time_rule": "session date at 16:00 America/New_York",
+                    "quote_time_rule": "America/New_York 16:00 regular, 13:00 early close",
                 },
             )
         except Exception as exc:

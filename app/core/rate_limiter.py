@@ -25,7 +25,7 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         # Пропускаем health check и metrics
-        if request.url.path in ["/health", "/metrics"]:
+        if request.url.path in ["/health", "/ready", "/metrics"]:
             return await call_next(request)
         
         # Получаем идентификатор клиента (IP или API ключ)

@@ -1,6 +1,6 @@
 # AEGIS Alpha
 
-Инфраструктурное ядро для поиска повторяющихся паттернов в рыночном шуме. Сейчас в репозитории работает production-каркас бэкенда: API, база, кэш, аудит и мониторинг. Сбор новостей, котировок и статистическая модель ещё не подключены к этому сервису.
+Инфраструктурное ядро для поиска повторяющихся паттернов в рыночном шуме. В репозитории работает API, PostgreSQL, Redis, аудит и отдельный worker дневных котировок. Аналитика, FinBERT, Telegram и торговые сигналы к этому сервису не подключены.
 
 Репозиторий: [github.com/dimitry8st-prog/AEGIS-ALPHA](https://github.com/dimitry8st-prog/AEGIS-ALPHA)
 
@@ -22,7 +22,7 @@
 2. Не «объяснять» новость, а считать, какие сочетания повторяются рядом с движением цены.
 3. Отбирать точки входа статистически, ближе к статистическому арбитражу, чем к теханализу или к дорогому LLM.
 
-Пока гипотеза не проверена на данных. Код сбора есть как черновик в `src/`, но запускаемый сервис — пакет `app/`.
+Пока гипотеза не проверена на данных. Запускаемый сбор котировок — пакет `worker/`. Пакет `app/` отдаёт API. Черновик `src/` к ним не подключён.
 
 ## Что уже работает
 
@@ -39,7 +39,11 @@ Sprint 0, инфраструктура:
 
 Отдельный процесс `python -m worker` загружает дневные OHLCV (по умолчанию AAPL, MSFT, NVDA), проверяет строки, пишет в PostgreSQL и печатает JSON-отчёт `READY` / `PARTIAL` / `FAILED`. CLI завершается с ненулевым кодом при `FAILED`. API по-прежнему `uvicorn app.main:app`. Черновик `src/main.py` не запускается вместе с worker.
 
-Правила времени: торговая сессия US equities, часовой пояс `America/New_York`; `quote_time` = календарная дата сессии в 16:00 ET (закрытие регулярной сессии), в БД как `TIMESTAMPTZ`. `received_at` — время получения. `window_end` исключающий (как в yfinance).
+Правила времени: часовой пояс `America/New_York`. `quote_time` — официальное закрытие кассовой сессии: 16:00 в обычный день и 13:00 в запланированное раннее закрытие, в БД как `TIMESTAMPTZ`. Выходные и полные праздники по повторяющемуся календарю NYSE/Nasdaq не записываются. Разовые закрытия в календарь не входят. `received_at` — время получения. `window_end` исключающий, как у yfinance: `start` входит в окно, `end` нет.
+
+Поддерживаемые инструменты этого этапа — только AAPL, MSFT и NVDA, биржа XNAS. Другой тикер yfinance не скачивает и не получает выдуманную биржу. `quote_time` входит в естественный ключ. Если 1 января выпадает на субботу, Nasdaq не переносит праздник на 31 декабря: это полный день с закрытием 16:00 ET (пример — 31 декабря 2021, Release 34-93675). Старая строка раннего закрытия, сохранённая в 16:00, при повторном сборе переносится на 13:00 в той же записи. Прежние время и цены пишутся в `market_quote_revisions`. Вторая строка не создаётся. Если строки 16:00 и 13:00 уже есть обе, уже накопленные ревизии строки 16:00 переносятся на строку 13:00, значения 16:00 копируются в историю, и только потом строка 16:00 удаляется в той же транзакции.
+
+`CachedAdapter` в `worker/adapters/cached.py` умеет обойти сбой Redis, но `python -m worker` его не создаёт. Кэш worker не подключён и не входит в `/ready`.
 
 Идемпотентность: уникальный ключ `(provider, symbol, exchange, interval, quote_time, adjustment_mode)`. Повтор того же окна не создаёт дубли; исправление источника пишется в `market_quote_revisions`. Невалидные и непреобразуемые строки источника — в `market_quote_quarantine` с причиной и исходным payload (включая `NaN`/пропуски), без выдуманных цен. `received` считает все полученные строки; `quarantined` увеличивается только после подтверждённой записи в карантин.
 
@@ -76,7 +80,7 @@ python -m worker collect \
   --start 2024-01-02 \
   --end 2024-01-06
 
-# 3) Yahoo Finance (исследовательский адаптер yfinance; сеть обязательна)
+# 3) Yahoo Finance (yfinance==0.2.49; сеть обязательна, CI этот вызов не делает)
 python -m worker collect \
   --provider yfinance \
   --symbols AAPL,MSFT,NVDA \
@@ -105,17 +109,25 @@ Compose (offline): первый `collect` → `READY`, `inserted=12`; повто
 
 ### Тесты
 
+Проверки ниже гонять на отдельной базе, не на рабочем volume Compose.
+
 ```bash
+psql "$DATABASE_URL" -f init.sql
+alembic upgrade head
 pytest -q
+python -m worker collect --provider offline --symbols AAPL,MSFT,NVDA --start 2024-01-02 --end 2024-01-06
+python -m worker collect --provider offline --symbols AAPL,MSFT,NVDA --start 2024-01-02 --end 2024-01-06
 ```
 
-CI (GitHub Actions) гоняет offline-тесты и интеграцию с PostgreSQL; реальный Yahoo не обязателен.
+Первый сбор этого окна: `READY`, `inserted=12`. Повтор: `inserted=0`, `duplicates=12`, строк в `market_quotes` остаётся 12. В CI недоступная база или отсутствующая схема проваливают обязательные тесты. Живой Yahoo в CI не входит: `python scripts/yfinance_live_smoke.py`.
+
+Протокол этой проверки: [docs/DATA_STAGE_ACCEPTANCE.md](docs/DATA_STAGE_ACCEPTANCE.md). Состояние всего проекта: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
 ## Чего ещё нет
 
-- Telegram-сборщик и расписание
+- Telegram-сборщик. Пример crontab лежит в `docs/market-operations.md` и не установлен
 - Аналитическое ядро: FinBERT, корреляции, бэктест, торговые сигналы
-- Проверка гипотезы на истории (целевой ориентир обсуждался как accuracy выше 55%)
+- Проверка гипотезы на истории. Ориентир accuracy выше 55% не доказан и не означает прибыльность
 - Пакет `src/` по-прежнему не точка входа контейнера; worker — отдельный пакет `worker/`
 
 ## Архитектура запущенного сервиса
@@ -143,20 +155,20 @@ graph TB
 | Наблюдаемость | Prometheus, Grafana, structlog |
 | Сборка | Docker, Docker Compose |
 
-Alembic указан в зависимостях. Каталога миграций в репозитории нет: таблицы создаёт `init.sql` при первом старте Postgres и `Base.metadata.create_all` при старте приложения.
+`init.sql` создаёт таблицы Sprint 0 при первом старте Postgres. Таблицы котировок добавляет Alembic: `alembic upgrade head` (ревизия `20261010_0001`). `Base.metadata.create_all` при старте API не заменяет эту миграцию.
 
 ## Структура репозитория
 
 ```
 .
 ├── app/                         # рабочий бэкенд, его запускает контейнер
-│   ├── main.py                  # FastAPI, /health, /results
-│   ├── api/v1/                  # auth, users, items, audit
+│   ├── main.py                  # FastAPI, /health, /ready, /results
+│   ├── api/v1/                  # auth, users, items, audit, market
 │   ├── core/                    # config, db, redis, jwt, rate limit, audit, metrics
 │   ├── models/                  # User, Item, AuditLog
 │   └── schemas/
 ├── worker/                      # ручной сбор котировок (отдельный процесс)
-│   ├── adapters/                # offline + yfinance (+ optional Redis cache)
+│   ├── adapters/                # offline + yfinance; CachedAdapter не подключён к CLI
 │   ├── pipeline.py              # fetch → validate → persist → report
 │   └── __main__.py              # python -m worker collect ...
 ├── alembic/                     # миграции таблиц котировок
@@ -191,9 +203,12 @@ docker compose up -d --build
 
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/ready
 ```
 
-Ответ содержит `"status": "healthy"` и `instance_id`. Интерактивная схема API: [http://localhost:8000/docs](http://localhost:8000/docs).
+`/health` — живость процесса: `"status": "healthy"` и `role=liveness`. Зависимости он не проверяет. `/ready` проверяет PostgreSQL и Redis API в пределах 2 секунд. Если обязательная зависимость недоступна, ответ `503` и имена `postgres` и/или `redis`, без пароля, URL и текста исключения. Кэш worker в `/ready` не входит. Docker HEALTHCHECK бьёт в `/health`, чтобы отказ Redis не перезапускал контейнер.
+
+Интерактивная схема API: [http://localhost:8000/docs](http://localhost:8000/docs). Пример ручного расписания, которое не установлено: [docs/market-operations.md](docs/market-operations.md).
 
 Контейнер `app` монтирует каталог проекта в `/app`. Команда процесса — `uvicorn app.main:app`. Образ собран на `python:3.11-slim` и работает от пользователя `appuser`.
 
@@ -234,7 +249,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 |---|---|---|
 | API | http://localhost:8000 | бэкенд |
 | OpenAPI | http://localhost:8000/docs | документация запросов |
-| Результаты | http://localhost:8000/results | HTML-таблица записей `items` |
+| Результаты | http://localhost:8000/results | HTML не больше 100 записей `items`, не котировки; нужен JWT |
 | Метрики | http://localhost:8000/metrics | Prometheus |
 | Prometheus | http://localhost:9090 | сбор метрик каждые 15 с с `app:8000` |
 | Grafana | http://localhost:3000 | дашборд API, логин из `.env` |
@@ -313,9 +328,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 | Метод | Путь | Смысл |
 |---|---|---|
-| `GET` | `/health` | живость процесса |
+| `GET` | `/health` | живость процесса, без проверки зависимостей |
+| `GET` | `/ready` | PostgreSQL и Redis API; 503, если обязательная зависимость недоступна |
 | `GET` | `/metrics` | метрики Prometheus |
-| `GET` | `/results` | HTML-список items |
+| `GET` | `/results` | HTML-список items, не больше 100 строк, с JWT |
 
 ### Пример
 
@@ -330,6 +346,14 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 ```
 
 Дальше заголовок `Authorization: Bearer <token>`.
+
+Чтение сбора, только GET. `start` включающий, `end` исключающий, даты сессии в `America/New_York`, окно не длиннее 366 дней. В одном ответе `/quotes` один `provider` и один `adjustment_mode`. Неизвестный запуск — 404.
+
+| Метод | Путь |
+|---|---|
+| `GET` | `/api/v1/market/runs` |
+| `GET` | `/api/v1/market/runs/{run_id}` |
+| `GET` | `/api/v1/market/quotes` |
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/items \
@@ -352,7 +376,7 @@ curl -X POST http://localhost:8000/api/v1/items \
 
 Журнал пишет middleware на изменения данных. В запись попадают пользователь из JWT, момент, снимок до и после и идентификатор инстанса. Это задел под compliance, а не торговый отчёт.
 
-Страница `/results` читает `items` и рисует таблицу: id, заголовок, начало описания, время создания. Если таблица пустая, страница об этом говорит.
+Страница `/results` требует JWT, экранирует значения и показывает не больше 100 последних `items`: id, заголовок, начало описания, время создания. Это не просмотр котировок. Котировки и отчёты читаются через `/api/v1/market/quotes` и `/api/v1/market/runs`.
 
 ## Черновик сборщиков в `src/`
 
@@ -392,29 +416,29 @@ Prometheus снимает `http_requests_total`, `http_request_duration_seconds`
 
 ## CI
 
-GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — offline pytest, миграции Alembic и интеграционные тесты worker с PostgreSQL (адаптер `offline`, без Yahoo).
+GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Job применяет `init.sql` и `alembic upgrade head`, затем запускает `pytest tests/`. Недоступная база или отсутствующая `market_quotes` в CI проваливают тест, а не пропускают его. В том же job есть повторный offline-сбор: первый отчёт `READY` / `inserted=12`, повтор `inserted=0` / `duplicates=12`. Живой Yahoo в CI не ходит.
 
-`.gitlab-ci.yml` по-прежнему описывает старый контур GitLab; для market-data используйте GitHub Actions.
+`.gitlab-ci.yml` на ветке `test` повторяет ту же обязательную проверку и не деплоит сам по себе: стадия `deploy` по-прежнему только для `main` и этим этапом не запускается.
 
 ## Дорожная карта
 
 | Этап | Результат |
 |---|---|
-| Сбор данных | Telegram и котировки пишутся в PostgreSQL |
-| Первый разбор | Jupyter или скрипт: есть ли повторяемые связки шума и цены |
-| Проверка гипотезы | бэктест, понятный порог качества |
-| Сигналы | только после проверки, например алерт в Telegram |
-| Масштаб | отдельные сервисы сбора и модели, если гипотеза жива |
+| Сбор котировок | дневные OHLCV AAPL, MSFT, NVDA пишутся worker-ом; это не весь AEGIS-ALPHA |
+| Исследовательский датасет | новости и файлы ещё не входят в запущенный контур |
+| Проверка гипотезы на истории | отдельный следующий этап; порог accuracy выше 55% обсуждался как ориентир и не доказан |
+| Симуляция | после проверки гипотезы, без брокера |
+| Пилот | только отдельным согласованием; реальные сделки в этот репозиторий не входят |
 
-Ближайший полезный шаг — начать копить данные, а не расширять API.
+Завершённый сбор дневных котировок не означает, что гипотеза подтверждена или что стратегия прибыльна.
 
 ## Известные ограничения
 
 - Два несовместимых контура данных: `app/` + `init.sql` и черновик `src/`.
-- `shema.txt` описывает каталоги `src/config`, `tests` и `.env.example` в старом виде. Конфига и тестов на диске нет; `.env.example` добавлен под рабочий сервис `app/`.
-- Healthcheck в `Dockerfile` вызывает библиотеку `requests`, её нет в `requirements.txt`, поэтому проверка внутри образа может быть красной при живом API. Снаружи смотрите `GET /health`.
-- В CI нет реальных тестов.
-- Аналитической модели в репозитории нет.
+- `shema.txt` описывает старое дерево каталогов. Рабочие тесты лежат в `tests/`, пример окружения — в `.env.example`.
+- Docker HEALTHCHECK вызывает `GET /health` через `urllib` и проверяет живость процесса. Готовность зависимостей — `GET /ready`.
+- Обязательные тесты CI ходят в PostgreSQL. Живой Yahoo туда не входит; отдельный smoke — `python scripts/yfinance_live_smoke.py`.
+- Аналитической модели, FinBERT, Telegram-сбора, брокера и торговых сигналов в репозитории нет.
 
 ## Лицензия
 
@@ -422,7 +446,7 @@ GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — offli
 
 ## Процесс сбора данных — BPMN
 
-[Описание процесса и варианты реализации](docs/aegis-alpha-bpmn.md) включают границы, условия, карантин, ограниченные повторы и результаты READY / PARTIAL / FAILED. Это целевая модель, не запущенный сборщик.
+[Описание процесса и варианты реализации](docs/aegis-alpha-bpmn.md) включают границы, условия, карантин, ограниченные повторы и результаты READY / PARTIAL / FAILED. Запускаемый сбор котировок — пакет `worker/`. `src/main.py` вместе с ним не стартует.
 
 ![Сбор исследовательского датасета](docs/bpmn/Process_Aegis.png)
 
