@@ -10,10 +10,12 @@ import asyncio
 import json
 import sys
 from datetime import date
+from pathlib import Path
 
 from worker.adapters.offline import OfflineAdapter
 from worker.adapters.yfinance_adapter import YFinanceAdapter
 from worker.config import WorkerSettings
+from worker.export import ExportError, export_quotes
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
 from worker.types import AdjustmentMode
@@ -56,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="1d",
         help="Bar interval (only 1d supported in this stage)",
     )
+
+    export = sub.add_parser("export", help="Write one stored quote series to CSV")
+    export.add_argument("--provider", required=True)
+    export.add_argument("--adjustment", required=True, choices=("auto_adjusted", "raw"))
+    export.add_argument("--symbols", required=True, help="Comma-separated tickers")
+    export.add_argument("--start", required=True, type=_parse_date)
+    export.add_argument("--end", required=True, type=_parse_date, help="Exclusive end date")
+    export.add_argument("--output-dir", required=True, type=Path)
     return p
 
 
@@ -87,11 +97,36 @@ async def _run_collect(args: argparse.Namespace) -> int:
     return 0 if report.status.value != "FAILED" else 1
 
 
+async def _run_export(args: argparse.Namespace) -> int:
+    settings = WorkerSettings()
+    symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
+    engine = create_engine(settings)
+    try:
+        manifest = await export_quotes(
+            engine,
+            provider=args.provider,
+            adjustment_mode=args.adjustment,
+            symbols=symbols,
+            start=args.start,
+            end=args.end,
+            output_dir=args.output_dir,
+        )
+    except ExportError as exc:
+        print(json.dumps({"status": "FAILED", "code": exc.code, "message": exc.message}, ensure_ascii=False))
+        return 2
+    finally:
+        await engine.dispose()
+    print(json.dumps({"status": "complete", "dataset_id": manifest["dataset_id"], "row_count": manifest["row_count"]}, ensure_ascii=False))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "collect":
         return asyncio.run(_run_collect(args))
+    if args.command == "export":
+        return asyncio.run(_run_export(args))
     parser.error(f"unknown command {args.command}")
     return 2
 

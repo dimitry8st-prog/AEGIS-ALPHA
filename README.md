@@ -107,6 +107,28 @@ Compose (offline): первый `collect` → `READY`, `inserted=12`; повто
 
 Пример отчёта: [docs/example-collection-report.json](docs/example-collection-report.json).
 
+### Снимок исследовательской базы
+
+Команда читает уже сохранённые дневные котировки и не обращается к Yahoo. Один каталог — один `provider` и один `adjustment_mode`. `start` включающий, `end` исключающий. Готовый каталог повторно не перезаписывается. Пустая выборка и `end`, который не позже `start`, завершаются кодом 2 и каталог не создают. Каталоги `datasets/` в git не входят.
+
+```bash
+python -m worker export \
+  --provider offline \
+  --adjustment raw \
+  --symbols AAPL,MSFT,NVDA \
+  --start 2024-01-02 \
+  --end 2024-01-06 \
+  --output-dir datasets/offline-raw-2024-01-02
+```
+
+Проверка снимка:
+
+```bash
+python -c "import hashlib, json, pathlib; root=pathlib.Path('datasets/offline-raw-2024-01-02'); digest=hashlib.sha256((root/'quotes.csv').read_bytes()).hexdigest(); manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8')); assert digest==manifest['csv_sha256']; assert manifest['row_count']==sum(1 for _ in (root/'quotes.csv').read_text(encoding='utf-8').splitlines()[1:] if _); print(manifest['dataset_id'], manifest['row_count'])"
+```
+
+Это фиксированный снимок текущей исследовательской базы. Цены получены в момент сбора и могут учитывать более поздние корректировки источника. Пример формата: [docs/examples/offline-raw-2024-01-02](docs/examples/offline-raw-2024-01-02). Повтор на другой базе меняет `run_id` и поэтому hash CSV. Одинаковые сохранённые строки и те же параметры дают тот же CSV.
+
 ### Тесты
 
 Проверки ниже гонять на отдельной базе, не на рабочем volume Compose.
