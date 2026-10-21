@@ -36,6 +36,54 @@ async def _cleanup(engine):
         await conn.execute(text("DELETE FROM market_collection_runs"))
 
 
+class _PreciseAdapter:
+    provider_name = "offline"
+
+    def __init__(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from worker.types import FetchResult, FetchStatus, QuoteBar
+
+        self._bar = QuoteBar(
+            provider="offline",
+            symbol="AAPL",
+            exchange="XNAS",
+            interval="1d",
+            quote_time=datetime(2024, 1, 2, 16, 0, tzinfo=ZoneInfo("America/New_York")),
+            open=Decimal("187.14999389648438"),
+            high=Decimal("188.44000244140625"),
+            low=Decimal("183.88999938964844"),
+            close=Decimal("185.63999938964844"),
+            volume=82488700,
+            adjustment_mode=AdjustmentMode.RAW,
+        )
+
+    async def fetch_daily(self, symbol, start, end, adjustment_mode):
+        from worker.types import FetchResult, FetchStatus
+
+        return FetchResult(status=FetchStatus.OK, symbol=symbol, bars=[self._bar])
+
+
+@pytest.mark.asyncio
+async def test_repeat_of_full_precision_price_is_a_duplicate(migrated_engine, settings):
+    await _cleanup(migrated_engine)
+    pipeline = MarketDataPipeline(_PreciseAdapter(), QuoteRepository(migrated_engine), settings)
+    window = dict(
+        symbols=["AAPL"],
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 3),
+        adjustment_mode=AdjustmentMode.RAW,
+    )
+    first = await pipeline.run(**window)
+    second = await pipeline.run(**window)
+    assert first.status is RunStatus.READY
+    assert first.counters.inserted == 1
+    assert second.counters.duplicates == 1
+    assert second.counters.updated == 0
+    assert await _count(migrated_engine, "market_quotes") == 1
+    assert await _count(migrated_engine, "market_quote_revisions") == 0
+
+
 @pytest.mark.asyncio
 async def test_normal_load(migrated_engine, settings):
     await _cleanup(migrated_engine)

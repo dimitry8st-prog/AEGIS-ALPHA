@@ -167,7 +167,8 @@ def _download_sync(
     # A previous call in this process must not leak into an empty frame.
     shared._ERRORS.clear()
     # Official yfinance docs: start inclusive, end exclusive; interval 1d.
-    # 0.2.49 accepts multi_level_index; 0.2.40 does not.
+    # 1.7.0 uses curl_cffi. 0.2.49 sent a requests client Yahoo answers with 429,
+    # which this library then reports as a missing timezone.
     frame = yf.download(
         tickers=symbol,
         start=start.isoformat(),

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from decimal import Decimal
+from dataclasses import replace
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -15,6 +16,25 @@ from zoneinfo import ZoneInfo
 from worker.config import WorkerSettings, sqlalchemy_async_url
 from worker.session_calendar import legacy_sixteen_close
 from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport
+
+
+_PRICE_SCALE = Decimal("0.00000001")
+
+
+def _stored_price(value: Decimal) -> Decimal:
+    """Match market_quotes Numeric(20, 8), half away from zero."""
+    return Decimal(value).quantize(_PRICE_SCALE, rounding=ROUND_HALF_UP)
+
+
+def _at_storage_scale(bar: QuoteBar) -> QuoteBar:
+    return replace(
+        bar,
+        open=_stored_price(bar.open),
+        high=_stored_price(bar.high),
+        low=_stored_price(bar.low),
+        close=_stored_price(bar.close),
+        volume=int(bar.volume),
+    )
 
 
 def create_engine(settings: WorkerSettings) -> AsyncEngine:
@@ -149,6 +169,7 @@ class QuoteRepository:
         exist, the 16:00 row is copied into that history and removed in the
         same transaction.
         """
+        bar = _at_storage_scale(bar)
         received_at = datetime.now(timezone.utc)
         quote_time = bar.quote_time.astimezone(timezone.utc)
         existing = await self.get_existing(bar)

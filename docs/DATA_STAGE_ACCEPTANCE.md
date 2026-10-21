@@ -90,7 +90,39 @@ python scripts/yfinance_live_smoke.py
 | Строки 16:00 и 13:00, у 16:00 три ревизии | после сбора одна котировка 13:00, все три ревизии связаны с ней | passed |
 | Повторный сбор той же сессии | число ревизий не выросло | passed |
 
+## Живой Yahoo, 2026-10-21
+
+PR #3 объединён merge-коммитом `1fc1fa66`. CI на `main`: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/39597197889, conclusion `success`. Проверка ниже — ветка `feature/yfinance-live-verification`.
+
+Причина прошлого `NOT_VERIFIED`: запрос `requests` без браузерного User-Agent к `https://query2.finance.yahoo.com/v8/finance/chart/AAPL` получил HTTP 429 и короткое тело `Too Many Requests`. TLS не отключался. Тот же URL с браузерным User-Agent вернул HTTP 200 и `application/json`. yfinance 0.2.49 из-за пустого или отклонённого ответа записывал `YFTzMissingError` (`possibly delisted; no timezone found`). Это не доказательство делистинга AAPL. Адаптер по-прежнему переводит такую ошибку в `SOURCE_TRANSIENT`.
+
+Официальный релиз yfinance 1.7.0 (2026-08-26) ходит через `curl_cffi`. Установлены `yfinance==1.7.0` и пришедший с ним `curl_cffi==0.16.3`. Повторная команда:
+
+```text
+python scripts/yfinance_live_smoke.py
+```
+
+Результат: `VERIFIED`. AAPL 2024-01-02, биржа XNAS, закрытие 16:00 America/New_York. `raw` close `185.63999938964844`, `auto_adjusted` close `183.40402221679688`.
+
+Сквозной сбор на новой базе `aegis_stage` (`127.0.0.1:55432`), `init.sql` и `alembic upgrade head` до `20261020_0002`. Рабочий `aegis-postgres` на порту 5432 не использовался. Окно `2024-01-02` — `2024-01-06`, конец исключающий. `IO_OPERATION_TIMEOUT_SECONDS=60` только для этого прогона.
+
+| Проверка | Факт | Статус |
+|---|---|---|
+| Обязательные тесты | `50 passed` | passed |
+| Smoke | `VERIFIED` | passed |
+| `raw`, первый сбор | `READY`, inserted 12 | passed |
+| `raw`, повтор | `READY`, inserted 0, duplicates 12 | passed |
+| `auto_adjusted`, первый сбор | `READY`, inserted 12 | passed |
+| `auto_adjusted`, первый повтор | `READY`, inserted 0, updated 6, duplicates 6 | passed |
+| `auto_adjusted`, второй повтор | `READY`, inserted 0, updated 9, duplicates 3 | passed |
+| Строки | 12 `raw` и 12 `auto_adjusted`; XNAS; 2024-01-02..05 16:00 ET; open и volume больше нуля | passed |
+| API без токена | HTTP 403 | passed |
+| API `raw` и `auto_adjusted` | HTTP 200, по 12 строк, `quote_time` `2024-01-02T21:00:00Z` | passed |
+| API отчёт | HTTP 200, `READY`, provider `yfinance` | passed |
+
+Повтор `auto_adjusted` не создаёт вторую строку. Часть цен отличается на доли цента между ответами Yahoo, поэтому пишется ревизия. `raw` между запросами не менялся. Offline-результат прежних прогонов этим не отменяется.
+
 ## Блокеры
 
-- Живой Yahoo не подтверждён. Повторный запрос в этом проходе не выполнялся.
 - Разовые закрытия биржи в календарь не входят.
+- `auto_adjusted` от Yahoo не стабилен до цента между соседними запросами. Это не вторая котировка и не подмена offline-данными.

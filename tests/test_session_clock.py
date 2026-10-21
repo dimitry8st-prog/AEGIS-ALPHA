@@ -60,6 +60,7 @@ def test_shortened_sessions_close_at_13_et():
 def test_installed_yfinance_accepts_download_arguments():
     import yfinance as yf
 
+    assert yf.__version__ == "1.7.0"
     signature = inspect.signature(yf.download)
     signature.bind(
         tickers="AAPL",
