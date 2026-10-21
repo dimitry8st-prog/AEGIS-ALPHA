@@ -80,7 +80,7 @@ python -m worker collect \
   --start 2024-01-02 \
   --end 2024-01-06
 
-# 3) Yahoo Finance (yfinance==0.2.49; сеть обязательна, CI этот вызов не делает)
+# 3) Yahoo Finance (yfinance==1.7.0; сеть обязательна, CI этот вызов не делает)
 python -m worker collect \
   --provider yfinance \
   --symbols AAPL,MSFT,NVDA \

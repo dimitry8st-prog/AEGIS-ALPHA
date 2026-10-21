@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from worker.config import WorkerSettings, sqlalchemy_async_url
 from worker.session_calendar import legacy_sixteen_close
-from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport
+from worker.types import SESSION_TIMEZONE, QuarantineRow, QuoteBar, RunReport, stored_ohlcv
 
 
 def create_engine(settings: WorkerSettings) -> AsyncEngine:
@@ -131,14 +131,10 @@ class QuoteRepository:
             ).first()
         if row is None:
             return None
-        return (
-            row.id,
-            Decimal(str(row.open)),
-            Decimal(str(row.high)),
-            Decimal(str(row.low)),
-            Decimal(str(row.close)),
-            int(row.volume),
+        open_, high, low, close, volume = stored_ohlcv(
+            row.open, row.high, row.low, row.close, row.volume
         )
+        return (row.id, open_, high, low, close, volume)
 
     async def upsert_bar(self, bar: QuoteBar, run_id: UUID) -> str:
         """Insert or update a bar. Returns inserted|updated|duplicate.
@@ -149,6 +145,7 @@ class QuoteRepository:
         exist, the 16:00 row is copied into that history and removed in the
         same transaction.
         """
+        bar = bar.at_storage_scale()
         received_at = datetime.now(timezone.utc)
         quote_time = bar.quote_time.astimezone(timezone.utc)
         existing = await self.get_existing(bar)
