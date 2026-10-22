@@ -64,6 +64,6 @@ class QuotePage(BaseModel):
     total: int
     timezone: str = Field(
         default="America/New_York",
-        description="start/end are session dates in this timezone. start is inclusive, end is exclusive.",
+        description="Provider's local session-date timezone: New York for US, Moscow for moex/finam. End exclusive.",
     )
     items: list[QuoteRow]

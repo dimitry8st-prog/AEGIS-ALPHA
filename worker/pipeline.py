@@ -21,6 +21,7 @@ from worker.types import (
     stored_ohlcv,
 )
 from worker.validation import validate_bar
+from worker.russian_market import SUPPORTED_PROVIDERS, provider_timezone, provider_quote_time_rule
 
 
 class MarketDataPipeline:
@@ -50,6 +51,9 @@ class MarketDataPipeline:
         notes: list[str] = []
         per_symbol: dict[str, dict[str, Any]] = {}
         counters = PersistCounters()
+        market_provider = (
+            self.adapter.provider_name if self.adapter.provider_name in SUPPORTED_PROVIDERS else "offline"
+        )
 
         if not symbols:
             return self._failed_local(
@@ -100,8 +104,8 @@ class MarketDataPipeline:
                     "end": end.isoformat(),
                     "interval": interval,
                     "adjustment_mode": adjustment_mode.value,
-                    "session_timezone": "America/New_York",
-                    "quote_time_rule": "America/New_York 16:00 regular, 13:00 early close",
+                    "session_timezone": provider_timezone(market_provider),
+                    "quote_time_rule": provider_quote_time_rule(market_provider),
                 },
             )
         except Exception as exc:
@@ -174,6 +178,7 @@ class MarketDataPipeline:
                 continue
 
             for failure in fetch.parse_failures:
+                counters.received += 1
                 await self._persist_quarantine(
                     failure, run_id, symbol, counters, errors, deadline
                 )
@@ -257,9 +262,7 @@ class MarketDataPipeline:
         errors: list[dict[str, Any]],
         deadline: float,
     ) -> None:
-        # Parse failures increment received here; validation failures already did.
-        if row.reason_code == "PARSE_ERROR":
-            counters.received += 1
+        # Every fetched row is counted by the caller, irrespective of reason code.
         try:
             await with_retries(
                 lambda r=row: self.repo.quarantine(r, run_id),

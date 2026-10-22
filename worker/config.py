@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings
+from pydantic import SecretStr
 
 
 class WorkerSettings(BaseSettings):
@@ -19,6 +20,7 @@ class WorkerSettings(BaseSettings):
     # adapters in CachedAdapter. API readiness does not speak for this cache.
     REDIS_URL: str | None = None
     MARKET_CACHE_TTL_SECONDS: int = 3600
+    FINAM_API_TOKEN: SecretStr | None = None
 
     class Config:
         env_file = ".env"
