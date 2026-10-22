@@ -252,6 +252,9 @@ class QuoteRepository:
             return "updated"
 
     async def _legacy_early_close(self, bar: QuoteBar):
+        # Legacy 16:00/13:00 reconciliation belongs only to US daily bars.
+        if bar.exchange != "XNAS" or bar.session_timezone != SESSION_TIMEZONE:
+            return None
         local = bar.quote_time.astimezone(ZoneInfo(SESSION_TIMEZONE))
         if (local.hour, local.minute, local.second) != (13, 0, 0):
             return None

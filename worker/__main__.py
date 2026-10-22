@@ -13,10 +13,14 @@ from datetime import date
 
 from worker.adapters.offline import OfflineAdapter
 from worker.adapters.yfinance_adapter import YFinanceAdapter
+from worker.adapters.moex_adapter import MoexAdapter
+from worker.adapters.finam_adapter import FinamAdapter
 from worker.config import WorkerSettings
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
 from worker.types import AdjustmentMode
+from worker.russian_market import RU_SYMBOLS, SUPPORTED_PROVIDERS
+from worker.portfolio import research_portfolio
 
 
 def _parse_date(value: str) -> date:
@@ -30,8 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect", help="Fetch and store daily OHLCV bars")
     collect.add_argument(
         "--symbols",
-        default="AAPL,MSFT,NVDA",
-        help="Comma-separated tickers",
+        default=None,
+        help="Comma-separated tickers (US: AAPL,MSFT,NVDA; MOEX/Finam: GAZP,GMKN)",
     )
     collect.add_argument("--start", required=True, type=_parse_date)
     collect.add_argument(
@@ -42,32 +46,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument(
         "--provider",
-        choices=("offline", "yfinance"),
+        choices=SUPPORTED_PROVIDERS,
         default="offline",
         help="Source adapter",
     )
     collect.add_argument(
         "--adjustment",
         choices=("auto_adjusted", "raw"),
-        default="auto_adjusted",
+        default=None,
+        help="Defaults to raw for MOEX/Finam, auto_adjusted for US providers",
     )
     collect.add_argument(
         "--interval",
         default="1d",
         help="Bar interval (only 1d supported in this stage)",
     )
+    sub.add_parser("portfolio", help="Show the GAZP/GMKN research watchlist (no brokerage positions)")
     return p
 
 
 async def _run_collect(args: argparse.Namespace) -> int:
     settings = WorkerSettings()
-    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    adjustment = AdjustmentMode(args.adjustment)
+    russian = args.provider in {"moex", "finam"}
+    default_symbols = ",".join(sorted(RU_SYMBOLS)) if russian else "AAPL,MSFT,NVDA"
+    symbols = [s.strip().upper() for s in (args.symbols or default_symbols).split(",") if s.strip()]
+    adjustment = AdjustmentMode(args.adjustment or ("raw" if russian else "auto_adjusted"))
 
     if args.provider == "offline":
         adapter = OfflineAdapter()
-    else:
+    elif args.provider == "yfinance":
         adapter = YFinanceAdapter()
+    elif args.provider == "moex":
+        adapter = MoexAdapter()
+    else:
+        token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
+        adapter = FinamAdapter(api_token=token)
 
     engine = create_engine(settings)
     repo = QuoteRepository(engine)
@@ -82,6 +95,9 @@ async def _run_collect(args: argparse.Namespace) -> int:
         )
     finally:
         await engine.dispose()
+        close = getattr(adapter, "aclose", None)
+        if close is not None:
+            await close()
 
     print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
     return 0 if report.status.value != "FAILED" else 1
@@ -92,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "collect":
         return asyncio.run(_run_collect(args))
+    if args.command == "portfolio":
+        print(json.dumps(research_portfolio(), ensure_ascii=False, indent=2))
+        return 0
     parser.error(f"unknown command {args.command}")
     return 2
 
