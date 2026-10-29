@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
 
+import worker.export as export_module
 from worker.adapters.offline import OfflineAdapter
 from worker.config import WorkerSettings
 from worker.export import ExportError, export_quotes
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository
-from worker.types import AdjustmentMode
+from worker.types import AdjustmentMode, QuoteBar
+
+MOSCOW = ZoneInfo("Europe/Moscow")
 
 
 @pytest.fixture
@@ -73,7 +80,7 @@ async def test_same_selection_repeats_the_csv_hash(migrated_engine, settings, tm
     assert one["selection"]["symbols"] == ["NVDA", "AAPL", "MSFT"]
     raw_text = (first / "quotes.csv").read_text(encoding="utf-8")
     assert "auto_adjusted" not in raw_text
-    assert "." in raw_text.splitlines()[1].split(",")[5]
+    assert raw_text.splitlines()[1].split(",")[6] == "185.00000000"
     adjusted = tmp_path / "adjusted"
     other = await export_quotes(
         migrated_engine,
@@ -183,7 +190,216 @@ async def test_failed_publish_does_not_leave_a_complete_snapshot(migrated_engine
             end=date(2024, 1, 6),
         )
     assert not target.exists()
-    assert not (tmp_path / "snap.partial").exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_manifest_write_leaves_no_snapshot(migrated_engine, settings, tmp_path, monkeypatch):
+    await _cleanup(migrated_engine)
+    await _load(migrated_engine, settings, AdjustmentMode.RAW)
+    target = tmp_path / "snap"
+    original = export_module._write_synced
+    calls = []
+
+    def fail_second(path, data):
+        calls.append(path.name)
+        if path.name == "manifest.json":
+            raise OSError("disk full")
+        original(path, data)
+
+    monkeypatch.setattr(export_module, "_write_synced", fail_second)
+    with pytest.raises(OSError):
+        await export_quotes(
+            migrated_engine,
+            output_dir=target,
+            provider="offline",
+            adjustment_mode="raw",
+            symbols=["AAPL"],
+            start=date(2024, 1, 2),
+            end=date(2024, 1, 6),
+        )
+    assert calls == ["quotes.csv", "manifest.json"]
+    assert not target.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_empty_existing_directory_is_left_alone(migrated_engine, settings, tmp_path):
+    await _cleanup(migrated_engine)
+    await _load(migrated_engine, settings, AdjustmentMode.RAW)
+    target = tmp_path / "snap"
+    target.mkdir()
+    with pytest.raises(ExportError) as caught:
+        await export_quotes(
+            migrated_engine,
+            output_dir=target,
+            provider="offline",
+            adjustment_mode="raw",
+            symbols=["AAPL"],
+            start=date(2024, 1, 2),
+            end=date(2024, 1, 6),
+        )
+    assert caught.value.code == "EXPORT_EXISTS"
+    assert target.is_dir() and list(target.iterdir()) == []
+    assert [path.name for path in tmp_path.iterdir()] == ["snap"]
+
+
+@pytest.mark.asyncio
+async def test_directory_created_during_export_is_not_touched(migrated_engine, settings, tmp_path, monkeypatch):
+    await _cleanup(migrated_engine)
+    await _load(migrated_engine, settings, AdjustmentMode.RAW)
+    target = tmp_path / "snap"
+    read_rows = export_module._read_rows
+
+    async def foreign_writer(*args, **kwargs):
+        rows = await read_rows(*args, **kwargs)
+        target.mkdir()
+        (target / "owner.txt").write_text("another process", encoding="utf-8")
+        return rows
+
+    monkeypatch.setattr(export_module, "_read_rows", foreign_writer)
+    with pytest.raises(ExportError) as caught:
+        await export_quotes(
+            migrated_engine,
+            output_dir=target,
+            provider="offline",
+            adjustment_mode="raw",
+            symbols=["AAPL"],
+            start=date(2024, 1, 2),
+            end=date(2024, 1, 6),
+        )
+    assert caught.value.code == "EXPORT_EXISTS"
+    assert sorted(path.name for path in target.iterdir()) == ["owner.txt"]
+    assert [path.name for path in tmp_path.iterdir()] == ["snap"]
+
+
+def test_concurrent_publish_to_one_target_keeps_one_snapshot(tmp_path):
+    target = tmp_path / "snap"
+    barrier = threading.Barrier(8)
+
+    def attempt(index: int):
+        csv_text = f"provider,symbol\noffline,ATTEMPT{index}\n"
+        digest = hashlib.sha256(csv_text.encode("utf-8")).hexdigest()
+        barrier.wait()
+        try:
+            export_module.publish(target, csv_text, {"csv_sha256": digest, "status": "complete"})
+            return "published"
+        except ExportError as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(attempt, range(8)))
+    assert outcomes.count("published") == 1
+    assert outcomes.count("EXPORT_EXISTS") == 7
+    manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["csv_sha256"] == _sha(target / "quotes.csv")
+    assert sorted(path.name for path in target.iterdir()) == ["manifest.json", "quotes.csv"]
+    assert [path.name for path in tmp_path.iterdir()] == ["snap"]
+
+
+def _moex_bar(symbol: str, day: date, close: str, *, hour=23, minute=59, second=59) -> QuoteBar:
+    return QuoteBar(
+        provider="moex",
+        symbol=symbol,
+        exchange="MISX",
+        interval="1d",
+        quote_time=datetime(day.year, day.month, day.day, hour, minute, second, tzinfo=MOSCOW),
+        open=Decimal("100.10"),
+        high=Decimal("110.00"),
+        low=Decimal("99.00"),
+        close=Decimal(close),
+        volume=1000,
+        adjustment_mode=AdjustmentMode.RAW,
+        session_timezone="Europe/Moscow",
+        currency="RUB",
+    )
+
+
+async def _seed_moex(engine, bars: list[QuoteBar]):
+    repo = QuoteRepository(engine)
+    run_id = await repo.create_run(
+        provider="moex",
+        symbols=sorted({bar.symbol for bar in bars}),
+        interval="1d",
+        adjustment_mode="raw",
+        window_start=date(2024, 1, 9),
+        window_end=date(2024, 1, 13),
+        params={},
+    )
+    for bar in bars:
+        await repo.upsert_bar(bar, run_id)
+    return run_id
+
+
+@pytest.mark.asyncio
+async def test_moex_snapshot_uses_moscow_dates_and_unknown_coverage(migrated_engine, tmp_path):
+    await _cleanup(migrated_engine)
+    run_id = await _seed_moex(
+        migrated_engine,
+        [
+            _moex_bar("GAZP", date(2024, 1, 9), "105.12345678"),
+            _moex_bar("GMKN", date(2024, 1, 9), "105.50"),
+            # 00:00:01 MSK is still January 9 in New York and UTC.
+            _moex_bar("GAZP", date(2024, 1, 10), "106.00", hour=0, minute=0, second=1),
+        ],
+    )
+    kwargs = dict(
+        provider="moex",
+        adjustment_mode="raw",
+        symbols=["GAZP", "GMKN"],
+        start=date(2024, 1, 10),
+        end=date(2024, 1, 11),
+    )
+    boundary = await export_quotes(migrated_engine, output_dir=tmp_path / "jan10", **kwargs)
+    lines = (tmp_path / "jan10" / "quotes.csv").read_text(encoding="utf-8").splitlines()
+    assert boundary["row_count"] == 1
+    assert lines[1].split(",")[4:6] == ["2024-01-10", "2024-01-10T00:00:01+03:00"]
+
+    window = dict(kwargs, start=date(2024, 1, 9), end=date(2024, 1, 10))
+    first = await export_quotes(migrated_engine, output_dir=tmp_path / "a", **window)
+    second = await export_quotes(migrated_engine, output_dir=tmp_path / "b", **window)
+    assert (tmp_path / "a" / "quotes.csv").read_bytes() == (tmp_path / "b" / "quotes.csv").read_bytes()
+    assert first["csv_sha256"] == second["csv_sha256"] == _sha(tmp_path / "a" / "quotes.csv")
+    assert first["row_count"] == 2
+    assert first["run_ids"] == [str(run_id)]
+    assert first["coverage_status"] == "UNKNOWN"
+    assert first["gaps"] is None
+    assert first["time"]["timezone"] == "Europe/Moscow"
+    assert first["time"]["calendar"] is None
+    assert "not actual exchange close" in first["time"]["quote_time_rule"]
+    assert not any("официальное закрытие" in item for item in first["limitations"])
+    rows = (tmp_path / "a" / "quotes.csv").read_text(encoding="utf-8").splitlines()
+    assert rows[1].split(",")[4:6] == ["2024-01-09", "2024-01-09T23:59:59+03:00"]
+    assert rows[1].split(",")[9] == "105.12345678"
+    assert {line.split(",")[13] for line in rows[1:]} == {"RUB"}
+
+    async with migrated_engine.begin() as conn:
+        await conn.execute(text("UPDATE market_quotes SET close = close + 1 WHERE symbol = 'GMKN'"))
+    before = (tmp_path / "a" / "quotes.csv").read_bytes()
+    changed = await export_quotes(migrated_engine, output_dir=tmp_path / "c", **window)
+    assert changed["csv_sha256"] != first["csv_sha256"]
+    assert (tmp_path / "a" / "quotes.csv").read_bytes() == before
+    assert _sha(tmp_path / "a" / "quotes.csv") == first["csv_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_us_snapshot_keeps_the_new_york_contract(migrated_engine, settings, tmp_path):
+    await _cleanup(migrated_engine)
+    await _load(migrated_engine, settings, AdjustmentMode.RAW)
+    manifest = await export_quotes(
+        migrated_engine,
+        output_dir=tmp_path / "us",
+        provider="offline",
+        adjustment_mode="raw",
+        symbols=["AAPL"],
+        start=date(2024, 1, 2),
+        end=date(2024, 1, 6),
+    )
+    assert manifest["coverage_status"] == "CHECKED_AGAINST_CALENDAR"
+    assert manifest["gaps"] == []
+    assert manifest["time"]["timezone"] == "America/New_York"
+    line = (tmp_path / "us" / "quotes.csv").read_text(encoding="utf-8").splitlines()[1]
+    assert line.split(",")[4:6] == ["2024-01-02", "2024-01-02T16:00:00-05:00"]
 
 
 @pytest.mark.asyncio
