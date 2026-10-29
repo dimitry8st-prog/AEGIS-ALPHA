@@ -3,6 +3,7 @@
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic import SecretStr
 
 
 class Settings(BaseSettings):
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+    FINAM_API_TOKEN: SecretStr | None = None
     
     # JWT
     JWT_SECRET_KEY: str

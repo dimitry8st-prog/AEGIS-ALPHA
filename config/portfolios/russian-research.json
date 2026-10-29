@@ -1,0 +1,19 @@
+{
+  "id": "russian-research",
+  "name": "Российский исследовательский портфель",
+  "kind": "research_watchlist",
+  "base_currency": "RUB",
+  "timezone": "Europe/Moscow",
+  "primary_data_provider": "moex",
+  "broker": {"provider": "finam", "access": "read_only"},
+  "positions_configured": false,
+  "instruments": [
+    {"symbol": "GAZP", "name": "Газпром", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GAZP@MISX"},
+    {"symbol": "GMKN", "name": "Норникель", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GMKN@MISX"}
+  ],
+  "notes": [
+    "Исследовательский список инструментов; доли, количества и сумма вложений не заданы.",
+    "Реальные позиции брокерского счёта этим файлом не описываются.",
+    "Сырые ряды не скорректированы на дивиденды и дробления, в том числе дробление GMKN."
+  ]
+}
