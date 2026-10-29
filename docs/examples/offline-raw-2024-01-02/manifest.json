@@ -1,0 +1,51 @@
+{
+  "app_commit": "8607c931e6aa326048fa37be5ccaef6d59b40577",
+  "coverage": {
+    "AAPL": {
+      "first": "2024-01-02",
+      "last": "2024-01-05",
+      "rows": 4
+    },
+    "MSFT": {
+      "first": "2024-01-02",
+      "last": "2024-01-05",
+      "rows": 4
+    },
+    "NVDA": {
+      "first": "2024-01-02",
+      "last": "2024-01-05",
+      "rows": 4
+    }
+  },
+  "csv_filename": "quotes.csv",
+  "csv_sha256": "20490110a35829eae9c1d160b351a392912f00c0926be0d4fbaae7370179e7d8",
+  "dataset_id": "sha256:20490110a35829eae9c1d160b351a392912f00c0926be0d4fbaae7370179e7d8",
+  "exported_at": "2026-10-21T18:24:10Z",
+  "format_version": "1",
+  "gaps": [],
+  "limitations": [
+    "Это снимок текущей исследовательской базы, а не историческое состояние источника на дату сессии.",
+    "Цены могли измениться из-за более поздних корректировок поставщика.",
+    "Разовые закрытия биржи не входят в календарь и выглядят как пропуски.",
+    "quote_time — официальное закрытие сессии в America/New_York."
+  ],
+  "row_count": 12,
+  "run_ids": [
+    "2a0e0bc0-58f6-4f11-a54f-dbf215325c03"
+  ],
+  "selection": {
+    "adjustment_mode": "raw",
+    "end": "2024-01-06",
+    "interval": "1d",
+    "provider": "offline",
+    "quote_time_timezone": "America/New_York",
+    "start": "2024-01-02",
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "NVDA"
+    ]
+  },
+  "status": "complete",
+  "yfinance_version": "1.7.0"
+}
