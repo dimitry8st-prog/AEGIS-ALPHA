@@ -153,6 +153,8 @@ python -m worker export --provider offline --adjustment raw --symbols AAPL,MSFT,
 | Сбой публикации | каталог со статусом `complete` не остаётся | passed |
 | Строки и manifest | `row_count` 12 равен числу строк CSV | passed |
 
+Формат 1 позже заменён форматом 2: добавлена колонка `session_date`, в manifest — блок `time` и `coverage_status`. Хэш формата 1 выше относится к прогону 2026-10-21. Пример в `docs/examples/offline-raw-2024-01-02` пересоздан в формате 2 (`sha256:1f36e64b29b66b067df95ab880e9410285f8fa7f53eb88d0f4ae35fa2253d3b7`). Интеграция с российскими источниками описана в `docs/RUSSIAN_MARKETS_ACCEPTANCE.md`.
+
 ## Блокеры
 
 - Разовые закрытия биржи в календарь не входят.

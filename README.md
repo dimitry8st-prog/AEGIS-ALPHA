@@ -148,25 +148,34 @@ Compose (offline): первый `collect` → `READY`, `inserted=12`; повто
 
 ### Снимок исследовательской базы
 
-Команда читает уже сохранённые дневные котировки и не обращается к Yahoo. Один каталог — один `provider` и один `adjustment_mode`. `start` включающий, `end` исключающий. Готовый каталог повторно не перезаписывается. Пустая выборка и `end`, который не позже `start`, завершаются кодом 2 и каталог не создают. Каталоги `datasets/` в git не входят.
+Команда читает уже сохранённые дневные котировки из PostgreSQL и не обращается к поставщикам данных. Один каталог — один `provider` и один `adjustment_mode`. `start` включающий, `end` исключающий. Каталоги `datasets/` в git не входят.
+
+Каталог назначения, даже пустой, не изменяется: экспорт завершится `EXPORT_EXISTS`. Каждый запуск пишет файлы в собственный временный каталог рядом с целью, затем атомарно создаёт цель и переносит `manifest.json` последним. Снимок без `manifest.json` не считается готовым. Пустая выборка и `end`, который не позже `start`, завершаются кодом 2 и каталог не создают.
 
 ```bash
 python -m worker export \
-  --provider offline \
+  --provider moex \
   --adjustment raw \
-  --symbols AAPL,MSFT,NVDA \
-  --start 2024-01-02 \
-  --end 2024-01-06 \
-  --output-dir datasets/offline-raw-2024-01-02
+  --symbols GAZP,GMKN \
+  --start 2024-01-09 \
+  --end 2024-01-13 \
+  --output-dir datasets/moex-raw-2024-01-09
 ```
 
 Проверка снимка:
 
 ```bash
-python -c "import hashlib, json, pathlib; root=pathlib.Path('datasets/offline-raw-2024-01-02'); digest=hashlib.sha256((root/'quotes.csv').read_bytes()).hexdigest(); manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8')); assert digest==manifest['csv_sha256']; assert manifest['row_count']==sum(1 for _ in (root/'quotes.csv').read_text(encoding='utf-8').splitlines()[1:] if _); print(manifest['dataset_id'], manifest['row_count'])"
+python -c "import hashlib, json, pathlib; root=pathlib.Path('datasets/moex-raw-2024-01-09'); digest=hashlib.sha256((root/'quotes.csv').read_bytes()).hexdigest(); manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8')); assert digest==manifest['csv_sha256']; assert manifest['row_count']==len((root/'quotes.csv').read_text(encoding='utf-8').splitlines())-1; print(manifest['dataset_id'], manifest['row_count'], manifest['coverage_status'])"
 ```
 
-Это фиксированный снимок текущей исследовательской базы. Цены получены в момент сбора и могут учитывать более поздние корректировки источника. Пример формата: [docs/examples/offline-raw-2024-01-02](docs/examples/offline-raw-2024-01-02). Повтор на другой базе меняет `run_id` и поэтому hash CSV. Одинаковые сохранённые строки и те же параметры дают тот же CSV.
+Время зависит от провайдера:
+
+| Провайдер | `session_date` и `quote_time` | Пропуски |
+|---|---|---|
+| `offline`, `yfinance` | America/New_York, закрытие 16:00 или 13:00 | по календарю американских сессий |
+| `moex`, `finam` | Europe/Moscow, метка 23:59:59 MSK, не время закрытия биржи | не вычисляются: `coverage_status` `UNKNOWN`, `gaps` `null` |
+
+Это фиксированный снимок текущей исследовательской базы, а не состояние источника на дату сессии. Цены получены в момент сбора и могут учитывать более поздние корректировки источника. Пример формата: [docs/examples/offline-raw-2024-01-02](docs/examples/offline-raw-2024-01-02). Повтор на другой базе меняет `run_id` и поэтому hash CSV. Одинаковые сохранённые строки и те же параметры дают тот же CSV.
 
 ### Тесты
 

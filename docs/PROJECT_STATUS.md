@@ -1,6 +1,6 @@
 # Состояние проекта
 
-Дата обзора: 2026-10-21. База обзора — `origin/main` `8607c93` после merge PR #4. CI этого коммита успешен: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/39651800745. Это не закрытие AEGIS-ALPHA целиком.
+Дата обзора: 2026-10-29. База обзора — `origin/main` `8607c93` после merge PR #4. CI этого коммита успешен: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/39651800745. Ветка `feature/russian-dataset-integration` объединяет PR #5 (экспорт снимка) и PR #6 (MOEX и Финам) и ещё не объединена с `main`. Это не закрытие AEGIS-ALPHA целиком.
 
 ## Сделано
 
@@ -14,12 +14,16 @@
 - `/health` — живость процесса. `/ready` — PostgreSQL и Redis API, таймаут 2 секунды, `503` без паролей и URL. Docker перезапускает контейнер по `/health`.
 - Контракт времени: обычное закрытие 16:00 America/New_York, раннее 13:00, несессионные даты не пишутся. 31 декабря остаётся полным днём, если 1 января — суббота. Старый штамп раннего закрытия 16:00 переносится на 13:00 с записью в `market_quote_revisions`. Список инструментов — AAPL, MSFT, NVDA, биржа XNAS. `yfinance` закреплён на 1.7.0: 0.2.49 получает от Yahoo HTTP 429 и сообщает это как отсутствие часового пояса.
 - Живой Yahoo проверен 2026-10-21 с `yfinance==1.7.0`. `raw` стабилен при повторе. `auto_adjusted` от Yahoo меняется на доли цента между запросами, поэтому повтор пишет ревизию, а не вторую строку. Подробности в `docs/DATA_STAGE_ACCEPTANCE.md`.
-- Ручной экспорт `python -m worker export` пишет CSV и `manifest.json` из PostgreSQL без обращения к Yahoo. Один снимок содержит один provider и один adjustment mode. Каталог `datasets/` не отслеживается git. Пример: `docs/examples/offline-raw-2024-01-02`.
+- Ручной экспорт `python -m worker export` пишет CSV и `manifest.json` из PostgreSQL без обращения к поставщикам. Один снимок содержит один provider и один adjustment mode. Существующий каталог назначения не изменяется; каждый запуск пишет в свой временный каталог. Каталог `datasets/` не отслеживается git. Пример: `docs/examples/offline-raw-2024-01-02`.
+- GAZP и GMKN собираются из официального MOEX ISS (TQBR, raw, RUB, Europe/Moscow). Экспорт MOEX отбирает даты по Москве и не применяет американский календарь. Подробности в `docs/RUSSIAN_MARKETS_ACCEPTANCE.md`.
 
 ## Не закрыто в этом этапе
 
 - Календарь не содержит разовых закрытий биржи.
 - `auto_adjusted` от Yahoo не стабилен до цента между соседними запросами.
+- Проверенного календаря Мосбиржи нет: полнота российских снимков не проверяется, в manifest `coverage_status` `UNKNOWN`.
+- Финам: `FINAM_API_TOKEN` не настроен, живая проверка не выполнялась (`NOT_CONFIGURED`).
+- Использование данных ISS для извлечения прибыли требует договора с Мосбиржей.
 - Пример crontab в `docs/market-operations.md` не установлен и Compose его не вызывает.
 - Telegram, файлы, FinBERT и аналитическое ядро не подключены.
 - `src/main.py` нельзя запускать вместе с `app/` на одной схеме.
