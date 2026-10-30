@@ -131,7 +131,33 @@ python scripts/yfinance_live_smoke.py
 | Обязательные тесты | `53 passed` | passed |
 | Offline smoke | `READY`, inserted 12; повтор inserted 0, duplicates 12 | passed |
 
+## Снимок исследовательской базы
+
+Экспорт читает PostgreSQL и не вызывает Yahoo. Это фиксированный снимок текущей исследовательской базы, а не состояние источника «на ту дату». Проверка шла на `aegis_stage` (`127.0.0.1:55432`). Рабочий `aegis-postgres` на порту 5432 не использовался.
+
+```text
+python -m worker export --provider offline --adjustment raw --symbols AAPL,MSFT,NVDA --start 2024-01-02 --end 2024-01-06 --output-dir datasets/offline-raw-2024-01-02
+```
+
+Повтор в другой каталог дал тот же CSV. SHA-256 `quotes.csv`: `20490110a35829eae9c1d160b351a392912f00c0926be0d4fbaae7370179e7d8`. `dataset_id` — `sha256:` и этот digest. `row_count` 12, пропусков нет, `run_id` `2a0e0bc0-58f6-4f11-a54f-dbf215325c03`. Пример формата лежит в `docs/examples/offline-raw-2024-01-02`. Каталоги `datasets/` в git не входят.
+
+| Проверка | Факт | Статус |
+|---|---|---|
+| Обязательные тесты | `58 passed` | passed |
+| Два экспорта одних строк | одинаковый CSV и hash | passed |
+| Изменение котировки после снимка | прежний файл не меняется, новый hash другой | passed |
+| `raw` и `auto_adjusted` | разные CSV | passed |
+| Пустая выборка | код `EMPTY_SELECTION`, каталог не создан, выход 2 | passed |
+| `end` не позже `start` | код `INVALID_WINDOW`, каталог не создан, выход 2 | passed |
+| Повтор в тот же каталог | код `EXPORT_EXISTS`, прежний CSV сохранён, выход 2 | passed |
+| Сбой публикации | каталог со статусом `complete` не остаётся | passed |
+| Строки и manifest | `row_count` 12 равен числу строк CSV | passed |
+
+Формат 1 позже заменён форматом 2: добавлена колонка `session_date`, в manifest — блок `time` и `coverage_status`. Хэш формата 1 выше относится к прогону 2026-10-21. Пример в `docs/examples/offline-raw-2024-01-02` пересоздан в формате 2 (`sha256:1f36e64b29b66b067df95ab880e9410285f8fa7f53eb88d0f4ae35fa2253d3b7`). Интеграция с российскими источниками описана в `docs/RUSSIAN_MARKETS_ACCEPTANCE.md`.
+
 ## Блокеры
 
 - Разовые закрытия биржи в календарь не входят.
 - `auto_adjusted` от Yahoo не стабилен до цента между соседними запросами. Это не вторая котировка и не подмена offline-данными.
+- Аналитика, бэктест, FinBERT, расписание, новые источники и брокер не подключены.
+- PR экспорта снимка не объединён.

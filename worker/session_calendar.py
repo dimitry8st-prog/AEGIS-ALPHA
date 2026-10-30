@@ -122,6 +122,19 @@ def session_close(day: date) -> time | None:
     return REGULAR_CLOSE
 
 
+def session_days(start: date, end: date) -> list[date]:
+    """Cash sessions in ``[start, end)``. Weekends and full holidays are omitted."""
+    if end <= start:
+        return []
+    days: list[date] = []
+    cursor = start
+    while cursor < end:
+        if session_close(cursor) is not None:
+            days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
+
+
 def quote_time_for_session(day: date) -> datetime | None:
     close = session_close(day)
     if close is None:

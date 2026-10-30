@@ -4,6 +4,47 @@
 
 Репозиторий: [github.com/dimitry8st-prog/AEGIS-ALPHA](https://github.com/dimitry8st-prog/AEGIS-ALPHA)
 
+## Российский исследовательский портфель: Мосбиржа и Финам
+
+Выбраны **Газпром (GAZP)** и **Норникель (GMKN)**. Источник биржевых данных —
+официальный MOEX ISS, режим TQBR; брокерский адаптер — официальный Finam Trade
+API. Валюта RUB, биржа MISX, часовой пояс Europe/Moscow. Портфель пока задаёт
+список инструментов для исследования: доли, количества и сумма вложений не заданы.
+
+```bash
+python -m worker portfolio
+python -m worker collect --provider moex --symbols GAZP,GMKN --adjustment raw --start 2024-01-09 --end 2024-01-13
+# После локальной настройки FINAM_API_TOKEN в .env, на доступной глубине истории:
+python -m worker collect --provider finam --symbols GAZP,GMKN --adjustment raw --start 2026-10-12 --end 2026-10-17
+```
+
+Оба провайдера подключены к существующим таблицам, валидации, карантину,
+ревизиям и отчётам. Для российских провайдеров параметры по умолчанию —
+GAZP,GMKN и raw; американские значения по умолчанию сохранены. Российские
+дневные свечи имеют стабильную метку даты 23:59:59 MSK: это **не утверждение
+о фактическом времени закрытия биржи**. Сырые цены не скорректированы на
+дивиденды и дробления; это особенно важно для исторического ряда GMKN.
+
+Защищённые маршруты:
+
+- `GET /api/v1/market/portfolios/russian-research` — состав исследовательского списка и статус настройки Финама.
+- `GET /api/v1/market/quotes?provider=moex&adjustment_mode=raw&start=2024-01-09&end=2024-01-13` — российские котировки по московским датам.
+- `GET /api/v1/market/runs?provider=moex` — отчёты сбора (также поддерживается finam).
+
+Для Финама требуется secret из [личного кабинета API](https://api.finam.ru/tokens/),
+переданный локально в `FINAM_API_TOKEN`. Код обменивает secret на access token
+и читает свечи. При отсутствии секрета — `FINAM_NOT_CONFIGURED`; наличие
+переменной само по себе не объявляется проверенным соединением. На 30.10.2026
+живой Финам — `NOT_CONFIGURED` / `NOT_VERIFIED`: подключение отложено до
+2 ноября 2026, команда `collect --provider finam` выше не выполнялась.
+Методов торговли и создания заявок в адаптере нет.
+
+ISS без договора предназначен для ознакомления; применение данных для
+извлечения прибыли и предоставления материалов третьим лицам требует
+договора с биржей согласно [условиям MOEX](https://www.moex.com/a2193).
+Подробности: [Мосбиржа](docs/moex-integration.md), [Финам](docs/finam-integration.md),
+[проверка подключения](docs/RUSSIAN_MARKETS_ACCEPTANCE.md).
+
 ## Общая схема процесса — 10.10.2026
 
 [Открыть подробную BPMN-схему](docs/diagrams/AEGIS_BPMN_2026-10-10.png).
@@ -106,6 +147,37 @@ docker compose --profile worker run --rm market-data-worker collect \
 Compose (offline): первый `collect` → `READY`, `inserted=12`; повтор того же окна → `duplicates=12`, `inserted=0`, в `market_quotes` по-прежнему 12 строк. Volumes не удалялись.
 
 Пример отчёта: [docs/example-collection-report.json](docs/example-collection-report.json).
+
+### Снимок исследовательской базы
+
+Команда читает уже сохранённые дневные котировки из PostgreSQL и не обращается к поставщикам данных. Один каталог — один `provider` и один `adjustment_mode`. `start` включающий, `end` исключающий. Каталоги `datasets/` в git не входят.
+
+Каталог назначения, даже пустой, не изменяется: экспорт завершится `EXPORT_EXISTS`. Каждый запуск пишет файлы в собственный временный каталог рядом с целью, затем атомарно создаёт цель и переносит `manifest.json` последним. Снимок без `manifest.json` не считается готовым. Пустая выборка и `end`, который не позже `start`, завершаются кодом 2 и каталог не создают.
+
+```bash
+python -m worker export \
+  --provider moex \
+  --adjustment raw \
+  --symbols GAZP,GMKN \
+  --start 2024-01-09 \
+  --end 2024-01-13 \
+  --output-dir datasets/moex-raw-2024-01-09
+```
+
+Проверка снимка:
+
+```bash
+python -c "import hashlib, json, pathlib; root=pathlib.Path('datasets/moex-raw-2024-01-09'); digest=hashlib.sha256((root/'quotes.csv').read_bytes()).hexdigest(); manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8')); assert digest==manifest['csv_sha256']; assert manifest['row_count']==len((root/'quotes.csv').read_text(encoding='utf-8').splitlines())-1; print(manifest['dataset_id'], manifest['row_count'], manifest['coverage_status'])"
+```
+
+Время зависит от провайдера:
+
+| Провайдер | `session_date` и `quote_time` | Пропуски |
+|---|---|---|
+| `offline`, `yfinance` | America/New_York, закрытие 16:00 или 13:00 | по календарю американских сессий |
+| `moex`, `finam` | Europe/Moscow, метка 23:59:59 MSK, не время закрытия биржи | не вычисляются: `coverage_status` `UNKNOWN`, `gaps` `null` |
+
+Это фиксированный снимок текущей исследовательской базы, а не состояние источника на дату сессии. Цены получены в момент сбора и могут учитывать более поздние корректировки источника. Пример формата: [docs/examples/offline-raw-2024-01-02](docs/examples/offline-raw-2024-01-02). Повтор на другой базе меняет `run_id` и поэтому hash CSV. Одинаковые сохранённые строки и те же параметры дают тот же CSV.
 
 ### Тесты
 

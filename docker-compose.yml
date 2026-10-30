@@ -12,6 +12,7 @@ services:
       # ВАЖНО: DATABASE_URL должен быть синхронизирован с POSTGRES_* ниже
       - DATABASE_URL=postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis123}@postgres:5432/${POSTGRES_DB:-aegis}
       - REDIS_URL=redis://redis:6379/0
+      - FINAM_API_TOKEN=${FINAM_API_TOKEN:-}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRATION_HOURS=24
@@ -122,6 +123,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis123}@postgres:5432/${POSTGRES_DB:-aegis}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - IO_RETRY_WAIT_SECONDS=${IO_RETRY_WAIT_SECONDS:-0.5}
+      - FINAM_API_TOKEN=${FINAM_API_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

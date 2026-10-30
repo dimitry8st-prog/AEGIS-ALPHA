@@ -18,6 +18,9 @@ from app.core.dependencies import get_current_active_user
 from app.core.error_handler import AppException, NotFoundError
 from app.models.user import User
 from app.schemas.market import QuotePage, QuoteRow, RunDetail, RunPage, RunSummary
+from app.core.config import settings
+from worker.russian_market import provider_timezone
+from worker.portfolio import research_portfolio
 
 router = APIRouter()
 
@@ -56,7 +59,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=MAX_PAGE),
     offset: int = Query(0, ge=0, le=100_000),
     status: str | None = Query(None, pattern="^(READY|PARTIAL|FAILED|RUNNING)$"),
-    provider: str | None = Query(None, pattern="^(offline|yfinance)$"),
+    provider: str | None = Query(None, pattern="^(offline|yfinance|moex|finam)$"),
     adjustment_mode: str | None = Query(None, pattern="^(raw|auto_adjusted)$"),
     start: date | None = None,
     end: date | None = None,
@@ -162,7 +165,7 @@ async def get_run(
 
 @router.get("/quotes", response_model=QuotePage)
 async def list_quotes(
-    provider: str = Query(..., pattern="^(offline|yfinance)$"),
+    provider: str = Query(..., pattern="^(offline|yfinance|moex|finam)$"),
     adjustment_mode: str = Query(..., pattern="^(raw|auto_adjusted)$"),
     start: date = Query(...),
     end: date = Query(...),
@@ -175,23 +178,25 @@ async def list_quotes(
     """Quotes for one provider and one adjustment mode.
 
     `start` is an inclusive session date and `end` is exclusive. Both are
-    America/New_York calendar dates, not UTC midnights. The span cannot
+    local session dates (Moscow for moex/finam, New York for US providers). The span cannot
     exceed 366 days. offline and yfinance are never returned together, and
     raw is never mixed with auto_adjusted.
     """
     del current_user
     _window(start, end)
+    session_timezone = provider_timezone(provider)
     filters = [
         "provider = :provider",
         "adjustment_mode = :adjustment_mode",
-        "CAST((quote_time AT TIME ZONE 'America/New_York') AS date) >= :start",
-        "CAST((quote_time AT TIME ZONE 'America/New_York') AS date) < :end",
+        "CAST((quote_time AT TIME ZONE :session_timezone) AS date) >= :start",
+        "CAST((quote_time AT TIME ZONE :session_timezone) AS date) < :end",
     ]
     params: dict = {
         "provider": provider,
         "adjustment_mode": adjustment_mode,
         "start": start,
         "end": end,
+        "session_timezone": session_timezone,
     }
     if symbol:
         filters.append("symbol = :symbol")
@@ -225,6 +230,22 @@ async def list_quotes(
         limit=limit,
         offset=offset,
         total=int(total),
-        timezone=SESSION_TIMEZONE,
+        timezone=session_timezone,
         items=[QuoteRow.model_validate(dict(row)) for row in rows],
     )
+
+
+@router.get("/portfolios/russian-research")
+async def russian_research_portfolio(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Research watchlist selected by the owner; it does not read brokerage positions."""
+    del current_user
+    portfolio = research_portfolio()
+    configured = bool(settings.FINAM_API_TOKEN and settings.FINAM_API_TOKEN.get_secret_value())
+    portfolio["broker_connection"] = {
+        "provider": "finam",
+        "status": "CONFIGURED_NOT_VERIFIED" if configured else "NOT_CONFIGURED",
+        "required_environment_variable": "FINAM_API_TOKEN",
+    }
+    return portfolio
