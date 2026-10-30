@@ -1,6 +1,13 @@
 # Состояние проекта
 
-Дата обзора: 2026-10-29. База обзора — `origin/main` `8607c93` после merge PR #4. CI этого коммита успешен: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/39651800745. Ветка `feature/russian-dataset-integration` объединяет PR #5 (экспорт снимка) и PR #6 (MOEX и Финам) и ещё не объединена с `main`. Это не закрытие AEGIS-ALPHA целиком.
+Дата обзора: 2026-10-30. На эту дату, до слияния PR #7, `main` — `8607c93` после merge PR #4. CI этого коммита успешен: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/39651800745.
+
+PR #7 (`feature/russian-dataset-integration`) содержит изменения PR #5 (`4d041df`, экспорт снимка) и PR #6 (`c211263`, MOEX и read-only Финам): команды `collect`, `export` и `portfolio`, российские адаптеры, безопасную публикацию снимков и даты Europe/Moscow. Проверенный head этих изменений — `161bed5f053d549052740bbb0c44e75b2e141b2a`. CI этого SHA с PostgreSQL и `REQUIRE_DATABASE=1` успешен, в логе `120 passed`:
+
+- pull_request: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/41092721326
+- push: https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/41092552976
+
+Число `120 passed` относится только к `161bed5`. Это закрытие технического этапа данных, а не подтверждение прибыльности и не закрытие AEGIS-ALPHA целиком.
 
 ## Сделано
 
@@ -22,7 +29,7 @@
 - Календарь не содержит разовых закрытий биржи.
 - `auto_adjusted` от Yahoo не стабилен до цента между соседними запросами.
 - Проверенного календаря Мосбиржи нет: полнота российских снимков не проверяется, в manifest `coverage_status` `UNKNOWN`.
-- Финам: `FINAM_API_TOKEN` не настроен, живая проверка не выполнялась (`NOT_CONFIGURED`).
+- Финам: `NOT_CONFIGURED` / `NOT_VERIFIED`. `FINAM_API_TOKEN` не настроен, живая проверка не выполнялась. Подключение брокера отложено до понедельника, 2 ноября 2026.
 - Использование данных ISS для извлечения прибыли требует договора с Мосбиржей.
 - Пример crontab в `docs/market-operations.md` не установлен и Compose его не вызывает.
 - Telegram, файлы, FinBERT и аналитическое ядро не подключены.

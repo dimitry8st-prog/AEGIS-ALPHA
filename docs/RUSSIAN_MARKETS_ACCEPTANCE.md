@@ -102,7 +102,7 @@ PR #5 (`4d041df`) и PR #6 (`c211263`). В `worker/__main__.py` сохранен
 | MOEX `auto_adjusted` | `EMPTY_SELECTION`, выход 2 | passed |
 | Повтор в существующий каталог | `EXPORT_EXISTS`, выход 2 | passed |
 | Американский offline-сбор и экспорт | `READY`, 12 строк, `CHECKED_AGAINST_CALENDAR`, пропусков нет | passed |
-| Финам live | `FINAM_API_TOKEN` не настроен | NOT_CONFIGURED |
+| Финам live | `FINAM_API_TOKEN` не настроен | NOT_CONFIGURED / NOT_VERIFIED |
 
 Между первым сбором и успешным повтором два прохода упали с `ConnectTimeout`:
 второй — `FAILED` по обоим тикерам, третий — `PARTIAL` (GMKN duplicates 4,
@@ -117,5 +117,17 @@ python -m worker collect --provider moex --symbols GAZP,GMKN --adjustment raw --
 python -m worker export --provider moex --adjustment raw --symbols GAZP,GMKN --start 2024-01-09 --end 2024-01-13 --output-dir datasets/moex-raw-2024-01-09
 ```
 
-Не проверено: Финам live; полнота российских рядов по календарю торгов;
-права на использование ISS без договора с биржей; CI интеграционного PR.
+## CI интеграционного PR, 30.10.2026
+
+SHA `161bed5f053d549052740bbb0c44e75b2e141b2a`. Workflow `ci`, job `offline-and-postgres`, PostgreSQL 15, переменная `REQUIRE_DATABASE=1`.
+
+| Прогон | Событие | Результат |
+|---|---|---|
+| https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/41092721326 | pull_request | success, в логе `120 passed in 7.33s` |
+| https://github.com/dimitry8st-prog/AEGIS-ALPHA/actions/runs/41092552976 | push | success, в логе `120 passed in 8.64s` |
+
+Локальные `120 passed` на `aegis_stage` от 29.10.2026 остаются отдельной проверкой. Совпадение числа не смешивает эти прогоны: каждый результат относится только к своему SHA и окружению. Отметка «CI интеграционного PR не проверен» для `161bed5` снята.
+
+Финам live по-прежнему **NOT_CONFIGURED / NOT_VERIFIED**. Секрет не запрашивался. Живое подключение отложено до понедельника, 2 ноября 2026.
+
+Не проверено: Финам live; полнота российских рядов по календарю торгов; права на использование ISS без договора с биржей.
