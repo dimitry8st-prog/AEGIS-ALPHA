@@ -1,0 +1,699 @@
+"""Strict Finam → PostgreSQL → re-collect → CSV/manifest acceptance.
+
+Real broker calls require ``--live``. Without that flag the CLI does not
+contact Finam and does not change the database. Mock verification is driven by
+pytest with ``httpx.MockTransport`` and an explicitly supplied test database.
+
+Exit 0 is allowed only after every acceptance stage passes. Ordinary
+``python -m worker collect`` may still exit 0 on PARTIAL; this scenario does not.
+Successful mock runs report ``MOCK_PASSED``, never ``LIVE_VERIFIED``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlparse
+
+import httpx
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from worker.adapters.finam_adapter import FinamAdapter
+from worker.config import WorkerSettings
+from worker.export import CSV_NAME, MANIFEST_NAME, ExportError, export_quotes
+from worker.pipeline import MarketDataPipeline
+from worker.repository import QuoteRepository, create_engine
+from worker.types import AdjustmentMode, RunReport, RunStatus
+
+DEFAULT_SYMBOLS = ("GAZP", "GMKN")
+PROVIDER = "finam"
+ADJUSTMENT = "raw"
+
+STATUS_MOCK_PASSED = "MOCK_PASSED"
+STATUS_LIVE_VERIFIED = "LIVE_VERIFIED"
+STATUS_NOT_LIVE = "NOT_LIVE"
+STATUS_NOT_CONFIGURED = "NOT_CONFIGURED"
+STATUS_FAILED = "ACCEPTANCE_FAILED"
+
+_SECRET_KEYS = re.compile(
+    r"(authorization|api[_-]?token|password|secret|bearer|database_url|dsn)",
+    re.IGNORECASE,
+)
+_URL_WITH_CREDS = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
+
+
+@dataclass(frozen=True)
+class StageResult:
+    name: str
+    ok: bool
+    detail: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "ok": self.ok, "detail": self.detail}
+
+
+def redact(value: Any, secrets: tuple[str, ...] = ()) -> Any:
+    """Remove secrets, auth headers and password-bearing URLs from diagnostics."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if _SECRET_KEYS.search(str(key)):
+                out[str(key)] = "[redacted]"
+            else:
+                out[str(key)] = redact(item, secrets)
+        return out
+    if isinstance(value, list):
+        return [redact(item, secrets) for item in value]
+    if isinstance(value, str):
+        text_value = value
+        for secret in secrets:
+            if secret and secret in text_value:
+                text_value = text_value.replace(secret, "[redacted]")
+        text_value = _URL_WITH_CREDS.sub("://[redacted]@", text_value)
+        return text_value
+    return value
+
+
+def safe_db_label(database_url: str) -> str:
+    """Host/db label without userinfo."""
+    parsed = urlparse(database_url)
+    host = parsed.hostname or "unknown"
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path or ""
+    return f"{host}{port}{path}"
+
+
+def _parse_date(value: str) -> date:
+    return date.fromisoformat(value)
+
+
+def _parse_symbols(value: str | None) -> list[str]:
+    raw = value or ",".join(DEFAULT_SYMBOLS)
+    symbols = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    if symbols != list(DEFAULT_SYMBOLS):
+        raise ValueError(
+            f"acceptance symbols must be exactly {','.join(DEFAULT_SYMBOLS)}"
+        )
+    return symbols
+
+
+async def count_quotes(
+    engine: AsyncEngine,
+    *,
+    symbols: list[str],
+    start: date,
+    end: date,
+) -> dict[str, int]:
+    placeholders = ", ".join(f":symbol_{index}" for index in range(len(symbols)))
+    params: dict[str, Any] = {
+        "provider": PROVIDER,
+        "adjustment": ADJUSTMENT,
+        "start": start,
+        "end": end,
+        "zone": "Europe/Moscow",
+    }
+    params.update({f"symbol_{index}": symbol for index, symbol in enumerate(symbols)})
+    query = text(
+        f"""
+        SELECT symbol, COUNT(*)::int AS n
+        FROM market_quotes
+        WHERE provider = :provider
+          AND adjustment_mode = :adjustment
+          AND interval = '1d'
+          AND symbol IN ({placeholders})
+          AND CAST(quote_time AT TIME ZONE :zone AS date) >= :start
+          AND CAST(quote_time AT TIME ZONE :zone AS date) < :end
+        GROUP BY symbol
+        """
+    )
+    async with engine.connect() as conn:
+        rows = (await conn.execute(query, params)).mappings().all()
+    counts = {symbol: 0 for symbol in symbols}
+    for row in rows:
+        counts[str(row["symbol"])] = int(row["n"])
+    return counts
+
+
+async def count_revisions(engine: AsyncEngine) -> int:
+    async with engine.connect() as conn:
+        value = await conn.scalar(text("SELECT COUNT(*)::int FROM market_quote_revisions"))
+    return int(value or 0)
+
+
+def _counters_consistent(report: RunReport) -> bool:
+    counters = report.counters
+    confirmed = counters.inserted + counters.updated + counters.duplicates
+    accounted = confirmed + counters.quarantined + counters.failed
+    return counters.received == accounted
+
+
+def _summarize_collect(report: RunReport) -> dict[str, Any]:
+    return {
+        "status": report.status.value,
+        "run_id": str(report.run_id),
+        "counters": {
+            "received": report.counters.received,
+            "inserted": report.counters.inserted,
+            "updated": report.counters.updated,
+            "duplicates": report.counters.duplicates,
+            "quarantined": report.counters.quarantined,
+            "failed": report.counters.failed,
+        },
+        "per_symbol": report.per_symbol,
+        "errors": report.errors,
+        "notes": report.notes,
+        "counters_consistent": _counters_consistent(report),
+    }
+
+
+def verify_export_artifacts(output_dir: Path) -> dict[str, Any]:
+    csv_path = output_dir / CSV_NAME
+    manifest_path = output_dir / MANIFEST_NAME
+    if not csv_path.is_file() or not manifest_path.is_file():
+        return {
+            "ok": False,
+            "reason": "CSV_OR_MANIFEST_MISSING",
+            "csv_exists": csv_path.is_file(),
+            "manifest_exists": manifest_path.is_file(),
+        }
+    csv_bytes = csv_path.read_bytes()
+    digest = hashlib.sha256(csv_bytes).hexdigest()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    row_count = max(len(csv_bytes.decode("utf-8").splitlines()) - 1, 0)
+    symbols_in_csv = {
+        line.split(",", 2)[1]
+        for line in csv_bytes.decode("utf-8").splitlines()[1:]
+        if line.strip()
+    }
+    selection = manifest.get("selection") or {}
+    checks = {
+        "sha256_match": digest == manifest.get("csv_sha256"),
+        "row_count_match": row_count == manifest.get("row_count"),
+        "provider": selection.get("provider") == PROVIDER,
+        "adjustment_mode": selection.get("adjustment_mode") == ADJUSTMENT,
+        "symbols_both": set(DEFAULT_SYMBOLS).issubset(symbols_in_csv),
+        "dataset_id": manifest.get("dataset_id") == f"sha256:{digest}",
+        "coverage_status_unknown": manifest.get("coverage_status") == "UNKNOWN",
+    }
+    return {
+        "ok": all(checks.values()),
+        "checks": checks,
+        "csv_sha256": digest,
+        "manifest_csv_sha256": manifest.get("csv_sha256"),
+        "row_count": row_count,
+        "manifest_row_count": manifest.get("row_count"),
+        "symbols_in_csv": sorted(symbols_in_csv),
+        "coverage_status": manifest.get("coverage_status"),
+        "calendar_completeness_proven": False,
+        "note": (
+            "Both tickers have rows; Russian session-calendar completeness "
+            "is not proven (coverage_status=UNKNOWN)."
+        ),
+    }
+
+
+async def run_acceptance_chain(
+    *,
+    adapter: FinamAdapter,
+    engine: AsyncEngine,
+    symbols: list[str],
+    start: date,
+    end: date,
+    output_dir: Path,
+    mode: str,
+    settings: WorkerSettings | None = None,
+    secrets: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Run the strict acceptance chain using an injected adapter and engine.
+
+    Does not wipe the database. ``mode`` is ``mock`` or ``live`` and only
+    affects the final status label on success.
+    """
+    if symbols != list(DEFAULT_SYMBOLS):
+        raise ValueError(f"acceptance symbols must be exactly {','.join(DEFAULT_SYMBOLS)}")
+    if end <= start:
+        raise ValueError("end must be after start (exclusive end)")
+
+    worker_settings = settings or WorkerSettings(
+        DATABASE_URL="postgresql://acceptance:acceptance@127.0.0.1:1/unused",
+        IO_RETRY_WAIT_SECONDS=0.01,
+        IO_MAX_ATTEMPTS=3,
+        RUN_DEADLINE_SECONDS=120,
+    )
+    pipeline = MarketDataPipeline(adapter, QuoteRepository(engine), worker_settings)
+    stages: list[StageResult] = []
+    failure_reason: str | None = None
+    collect_options = dict(
+        symbols=symbols,
+        start=start,
+        end=end,
+        adjustment_mode=AdjustmentMode.RAW,
+        interval="1d",
+    )
+
+    quotes_before = await count_quotes(engine, symbols=symbols, start=start, end=end)
+    revisions_before = await count_revisions(engine)
+
+    first = await pipeline.run(**collect_options)
+    first_summary = _summarize_collect(first)
+    quotes_after_first = await count_quotes(engine, symbols=symbols, start=start, end=end)
+    both_present = all(quotes_after_first.get(symbol, 0) > 0 for symbol in symbols)
+    first_ok = (
+        first.status is RunStatus.READY
+        and first.provider == PROVIDER
+        and first.adjustment_mode == ADJUSTMENT
+        and not first.errors
+        and first.counters.quarantined == 0
+        and first.counters.failed == 0
+        and _counters_consistent(first)
+        and all(first.per_symbol.get(symbol, {}).get("status") == "OK" for symbol in symbols)
+        and all(int(first.per_symbol.get(symbol, {}).get("bars") or 0) > 0 for symbol in symbols)
+        and both_present
+    )
+    if first.status is RunStatus.PARTIAL:
+        failure_reason = failure_reason or "FIRST_COLLECT_PARTIAL"
+    elif first.status is RunStatus.FAILED:
+        failure_reason = failure_reason or "FIRST_COLLECT_FAILED"
+    elif not both_present:
+        missing = [symbol for symbol in symbols if quotes_after_first.get(symbol, 0) == 0]
+        failure_reason = failure_reason or f"MISSING_TICKER_DATA:{','.join(missing)}"
+    elif not first_ok:
+        failure_reason = failure_reason or "FIRST_COLLECT_NOT_READY"
+    stages.append(
+        StageResult(
+            "first_collect_ready",
+            first_ok,
+            {
+                **first_summary,
+                "quotes_before": quotes_before,
+                "quotes_after": quotes_after_first,
+            },
+        )
+    )
+
+    per_ticker_ok = first_ok
+    stages.append(
+        StageResult(
+            "both_tickers_saved",
+            per_ticker_ok,
+            {
+                "quotes": quotes_after_first,
+                "required_symbols": list(symbols),
+                "calendar_completeness_proven": False,
+            },
+        )
+    )
+
+    clean_adapters = first_ok
+    stages.append(
+        StageResult(
+            "no_adapter_errors_or_rejects",
+            clean_adapters,
+            {
+                "errors": first.errors,
+                "quarantined": first.counters.quarantined,
+                "failed": first.counters.failed,
+                "counters_consistent": _counters_consistent(first),
+            },
+        )
+    )
+
+    revisions_mid = await count_revisions(engine)
+    second = await pipeline.run(**collect_options)
+    second_summary = _summarize_collect(second)
+    quotes_after_second = await count_quotes(engine, symbols=symbols, start=start, end=end)
+    revisions_after = await count_revisions(engine)
+    repeat_ok = (
+        first_ok
+        and second.status is RunStatus.READY
+        and not second.errors
+        and second.counters.quarantined == 0
+        and second.counters.failed == 0
+        and second.counters.inserted == 0
+        and second.counters.updated == 0
+        and second.counters.duplicates == second.counters.received
+        and second.counters.received > 0
+        and _counters_consistent(second)
+        and quotes_after_second == quotes_after_first
+        and revisions_after == revisions_mid
+    )
+    if first_ok and not repeat_ok:
+        failure_reason = failure_reason or "REPEAT_COLLECT_NOT_IDEMPOTENT"
+    stages.append(
+        StageResult(
+            "repeat_collect_duplicates_only",
+            repeat_ok,
+            {
+                **second_summary,
+                "quotes_after": quotes_after_second,
+                "revisions_before_repeat": revisions_mid,
+                "revisions_after_repeat": revisions_after,
+                "revisions_before_first": revisions_before,
+            },
+        )
+    )
+
+    export_one: dict[str, Any] | None = None
+    export_two: dict[str, Any] | None = None
+    verify_one: dict[str, Any] = {"ok": False, "reason": "SKIPPED"}
+    verify_two: dict[str, Any] = {"ok": False, "reason": "SKIPPED"}
+    export_dirs_ok = False
+    identical_exports = False
+    export_exists_ok = False
+    first_dir = Path(output_dir)
+    second_dir = Path(str(output_dir) + "-repeat")
+    first_csv_before_conflict: bytes | None = None
+    first_manifest_before_conflict: bytes | None = None
+
+    if repeat_ok:
+        try:
+            export_one = await export_quotes(
+                engine,
+                provider=PROVIDER,
+                adjustment_mode=ADJUSTMENT,
+                symbols=symbols,
+                start=start,
+                end=end,
+                output_dir=first_dir,
+            )
+            verify_one = verify_export_artifacts(first_dir)
+            export_two = await export_quotes(
+                engine,
+                provider=PROVIDER,
+                adjustment_mode=ADJUSTMENT,
+                symbols=symbols,
+                start=start,
+                end=end,
+                output_dir=second_dir,
+            )
+            verify_two = verify_export_artifacts(second_dir)
+            csv_one = (first_dir / CSV_NAME).read_bytes()
+            csv_two = (second_dir / CSV_NAME).read_bytes()
+            identical_exports = (
+                csv_one == csv_two
+                and export_one["csv_sha256"] == export_two["csv_sha256"]
+                and verify_one.get("csv_sha256") == verify_two.get("csv_sha256")
+            )
+            export_dirs_ok = bool(verify_one.get("ok") and verify_two.get("ok"))
+            first_csv_before_conflict = csv_one
+            first_manifest_before_conflict = (first_dir / MANIFEST_NAME).read_bytes()
+            try:
+                await export_quotes(
+                    engine,
+                    provider=PROVIDER,
+                    adjustment_mode=ADJUSTMENT,
+                    symbols=symbols,
+                    start=start,
+                    end=end,
+                    output_dir=first_dir,
+                )
+                export_exists_ok = False
+                failure_reason = failure_reason or "EXPORT_EXISTS_NOT_RAISED"
+            except ExportError as exc:
+                export_exists_ok = (
+                    exc.code == "EXPORT_EXISTS"
+                    and (first_dir / CSV_NAME).read_bytes() == first_csv_before_conflict
+                    and (first_dir / MANIFEST_NAME).read_bytes()
+                    == first_manifest_before_conflict
+                )
+                if not export_exists_ok:
+                    failure_reason = failure_reason or "EXPORT_EXISTS_MUTATED_TARGET"
+        except ExportError as exc:
+            failure_reason = failure_reason or f"EXPORT_ERROR:{exc.code}"
+            export_one = {"code": exc.code, "message": exc.message}
+        except Exception as exc:  # noqa: BLE001 — surfaced in report, redacted below
+            failure_reason = failure_reason or f"EXPORT_EXCEPTION:{type(exc).__name__}"
+            export_one = {"error_type": type(exc).__name__, "message": str(exc)[:300]}
+    else:
+        failure_reason = failure_reason or "EXPORT_SKIPPED_AFTER_COLLECT_FAILURE"
+
+    stages.append(
+        StageResult(
+            "export_selection",
+            bool(export_dirs_ok and export_one and export_two),
+            {
+                "first": {
+                    "dataset_id": None if export_one is None else export_one.get("dataset_id"),
+                    "row_count": None if export_one is None else export_one.get("row_count"),
+                    "csv_sha256": None if export_one is None else export_one.get("csv_sha256"),
+                    "selection": None if export_one is None else export_one.get("selection"),
+                },
+                "second": {
+                    "dataset_id": None if export_two is None else export_two.get("dataset_id"),
+                    "row_count": None if export_two is None else export_two.get("row_count"),
+                    "csv_sha256": None if export_two is None else export_two.get("csv_sha256"),
+                },
+            },
+        )
+    )
+    stages.append(
+        StageResult(
+            "csv_matches_manifest",
+            bool(verify_one.get("ok") and verify_two.get("ok")),
+            {"first": verify_one, "second": verify_two},
+        )
+    )
+    stages.append(
+        StageResult(
+            "identical_exports",
+            identical_exports,
+            {
+                "sha256_equal": (
+                    None
+                    if export_one is None or export_two is None
+                    else export_one.get("csv_sha256") == export_two.get("csv_sha256")
+                ),
+                "first_dir": str(first_dir),
+                "second_dir": str(second_dir),
+            },
+        )
+    )
+    stages.append(
+        StageResult(
+            "export_exists_preserves_target",
+            export_exists_ok,
+            {
+                "code": "EXPORT_EXISTS" if export_exists_ok else None,
+                "target": str(first_dir),
+            },
+        )
+    )
+
+    all_ok = all(stage.ok for stage in stages)
+    if all_ok:
+        status = STATUS_LIVE_VERIFIED if mode == "live" else STATUS_MOCK_PASSED
+        failure_reason = None
+    else:
+        status = STATUS_FAILED
+        failure_reason = failure_reason or "STAGE_FAILED"
+
+    report = {
+        "mode": mode,
+        "status": status,
+        "provider": PROVIDER,
+        "symbols": list(symbols),
+        "adjustment_mode": ADJUSTMENT,
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "stages": [stage.to_dict() for stage in stages],
+        "ticker_counts": quotes_after_second if repeat_ok else quotes_after_first,
+        "repeat_collect": second_summary,
+        "csv_manifest_checks": {"first": verify_one, "second": verify_two},
+        "failure_reason": failure_reason,
+        "limitations": [
+            "Russian trading-calendar completeness is not proven.",
+            "coverage_status remains UNKNOWN when a calendar is absent.",
+            "Presence of both tickers is not proof of no missing session minutes or days.",
+        ],
+    }
+    return redact(report, secrets)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Strict Finam acceptance: collect → repeat → export CSV/manifest. "
+            "Real broker access requires --live and FINAM_API_TOKEN."
+        )
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Contact Finam with FINAM_API_TOKEN and write to the explicit test database",
+    )
+    parser.add_argument(
+        "--database-url",
+        default=None,
+        help="Explicit PostgreSQL URL for a separate test database (required with --live)",
+    )
+    parser.add_argument("--start", type=_parse_date, required=True, help="Inclusive start YYYY-MM-DD")
+    parser.add_argument("--end", type=_parse_date, required=True, help="Exclusive end YYYY-MM-DD")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Destination directory for the first export (must not already exist)",
+    )
+    parser.add_argument(
+        "--symbols",
+        default=",".join(DEFAULT_SYMBOLS),
+        help="Must be GAZP,GMKN",
+    )
+    return parser
+
+
+def _token_from_env() -> str | None:
+    value = os.environ.get("FINAM_API_TOKEN")
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+async def async_main(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        symbols = _parse_symbols(args.symbols)
+    except ValueError as exc:
+        report = {
+            "mode": "live" if args.live else "dry",
+            "status": STATUS_FAILED,
+            "provider": PROVIDER,
+            "symbols": args.symbols,
+            "adjustment_mode": ADJUSTMENT,
+            "window": {"start": args.start.isoformat(), "end": args.end.isoformat()},
+            "stages": [],
+            "failure_reason": str(exc),
+        }
+        return 2, report
+
+    base = {
+        "provider": PROVIDER,
+        "symbols": symbols,
+        "adjustment_mode": ADJUSTMENT,
+        "window": {"start": args.start.isoformat(), "end": args.end.isoformat()},
+        "output_dir": str(args.output_dir),
+        "stages": [],
+        "ticker_counts": {},
+        "repeat_collect": None,
+        "csv_manifest_checks": {},
+        "limitations": [
+            "Russian trading-calendar completeness is not proven.",
+            "Successful mock tests never set LIVE_VERIFIED.",
+        ],
+    }
+
+    if not args.live:
+        report = {
+            **base,
+            "mode": "dry",
+            "status": STATUS_NOT_LIVE,
+            "failure_reason": (
+                "Real Finam calls require --live. Without it this scenario does "
+                "not contact the broker and does not change the database."
+            ),
+        }
+        return 2, report
+
+    token = _token_from_env()
+    if not token:
+        report = {
+            **base,
+            "mode": "live",
+            "status": STATUS_NOT_CONFIGURED,
+            "failure_reason": "FINAM_API_TOKEN is missing or empty in the local environment",
+        }
+        return 2, report
+
+    if not args.database_url:
+        report = {
+            **base,
+            "mode": "live",
+            "status": STATUS_NOT_CONFIGURED,
+            "failure_reason": (
+                "Explicit --database-url for a separate test database is required; "
+                "DATABASE_URL is not used as an implicit fallback"
+            ),
+        }
+        return 2, report
+
+    # Never pass env DATABASE_URL into WorkerSettings for this scenario.
+    settings = WorkerSettings(
+        DATABASE_URL=args.database_url,
+        IO_RETRY_WAIT_SECONDS=0.5,
+        FINAM_API_TOKEN=None,
+    )
+    engine = create_engine(settings)
+    adapter = FinamAdapter(api_token=token)
+    try:
+        report = await run_acceptance_chain(
+            adapter=adapter,
+            engine=engine,
+            symbols=symbols,
+            start=args.start,
+            end=args.end,
+            output_dir=args.output_dir,
+            mode="live",
+            settings=settings,
+            secrets=(token, args.database_url),
+        )
+        report["database"] = safe_db_label(args.database_url)
+    finally:
+        await engine.dispose()
+        close = getattr(adapter, "aclose", None)
+        if close is not None:
+            await close()
+
+    code = 0 if report.get("status") == STATUS_LIVE_VERIFIED else 2
+    return code, report
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        code, report = asyncio.run(async_main(argv))
+    except Exception as exc:  # noqa: BLE001 — CLI must never leak secrets
+        token = _token_from_env() or ""
+        db_url = ""
+        if argv:
+            try:
+                preview = build_parser().parse_args(argv)
+                db_url = preview.database_url or ""
+            except SystemExit:
+                db_url = ""
+        failure = redact(
+            {
+                "mode": "live" if (argv and "--live" in argv) else "dry",
+                "status": STATUS_FAILED,
+                "provider": PROVIDER,
+                "failure_reason": f"{type(exc).__name__}: {exc}"[:500],
+            },
+            secrets=tuple(item for item in (token, db_url) if item),
+        )
+        print(json.dumps(failure, ensure_ascii=False, indent=2))
+        return 2
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return code
+
+
+# Optional hook used by tests to build a MockTransport-backed adapter without
+# duplicating Finam HTTP contract details in the CLI.
+def mock_finam_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

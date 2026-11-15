@@ -34,10 +34,14 @@ GAZP,GMKN и raw; американские значения по умолчан�
 Для Финама требуется secret из [личного кабинета API](https://api.finam.ru/tokens/),
 переданный локально в `FINAM_API_TOKEN`. Код обменивает secret на access token
 и читает свечи. При отсутствии секрета — `FINAM_NOT_CONFIGURED`; наличие
-переменной само по себе не объявляется проверенным соединением. На 30.10.2026
-живой Финам — `NOT_CONFIGURED` / `NOT_VERIFIED`: подключение отложено до
-2 ноября 2026, команда `collect --provider finam` выше не выполнялась.
-Методов торговли и создания заявок в адаптере нет.
+переменной само по себе не объявляется проверенным соединением. Живой Финам —
+`NOT_CONFIGURED` / `NOT_VERIFIED`: строгая приёмка готовится через
+`scripts/finam_live_smoke.py`, но live-прогон не выполнялся. Без `--live`
+сценарий не обращается к брокеру и не меняет базу; с `--live` нужны токен в
+окружении и явная `--database-url` отдельной тестовой базы. Успех mock —
+`MOCK_PASSED`, не `LIVE_VERIFIED`. Обычный `collect` по-прежнему может дать
+код 0 при `PARTIAL`; сценарий приёмки требует `READY` и полную цепочку до
+совпадения CSV/manifest. Методов торговли и создания заявок в адаптере нет.
 
 ISS без договора предназначен для ознакомления; применение данных для
 извлечения прибыли и предоставления материалов третьим лицам требует
@@ -56,6 +60,11 @@ ISS без договора предназначен для ознакомлен
 ## Идея
 
 Классический анализ ищет устойчивую закономерность и строит из неё прогноз. AEGIS Alpha исходит из другого допущения: на коротком горизонте рынок хаотичен, а полезный сигнал прячется в повторениях шума — сообщениях Telegram, отчётах и котировках.
+
+Целевой выход — объяснимый кандидат на сделку после проверки факта и сопоставления
+с реакцией цены; автоматическая торговля в текущий объём не входит. Согласованная
+концепция, границы «уже есть / ещё нет» и пределы доказанности:
+[docs/AEGIS_CONCEPT.md](docs/AEGIS_CONCEPT.md).
 
 Рабочая гипотеза:
 
@@ -193,7 +202,23 @@ python -m worker collect --provider offline --symbols AAPL,MSFT,NVDA --start 202
 
 Первый сбор этого окна: `READY`, `inserted=12`. Повтор: `inserted=0`, `duplicates=12`, строк в `market_quotes` остаётся 12. В CI недоступная база или отсутствующая схема проваливают обязательные тесты. Живой Yahoo в CI не входит: `python scripts/yfinance_live_smoke.py`.
 
-Протокол этой проверки: [docs/DATA_STAGE_ACCEPTANCE.md](docs/DATA_STAGE_ACCEPTANCE.md). Состояние всего проекта: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+Строгая приёмка Финама без брокера (MockTransport + отдельная тестовая PostgreSQL):
+
+```bash
+pytest -q tests/test_finam_adapter.py tests/test_finam_live_smoke.py
+```
+
+Будущий ручной live-запуск на отдельной тестовой базе (токен только в env):
+
+```bash
+python scripts/finam_live_smoke.py --live \
+  --database-url "$FINAM_ACCEPTANCE_DATABASE_URL" \
+  --start 2026-10-12 \
+  --end 2026-10-17 \
+  --output-dir datasets/finam-live-smoke-2026-10-12
+```
+
+Протокол этой проверки: [docs/DATA_STAGE_ACCEPTANCE.md](docs/DATA_STAGE_ACCEPTANCE.md). Российский контур и критерии Finam: [docs/RUSSIAN_MARKETS_ACCEPTANCE.md](docs/RUSSIAN_MARKETS_ACCEPTANCE.md). Состояние всего проекта: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
 ## Чего ещё нет
 
