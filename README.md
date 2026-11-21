@@ -37,8 +37,9 @@ GAZP,GMKN и raw; американские значения по умолчан�
 переменной само по себе не объявляется проверенным соединением. Живой Финам —
 `NOT_CONFIGURED` / `NOT_VERIFIED`: строгая приёмка готовится через
 `scripts/finam_live_smoke.py`, но live-прогон не выполнялся. Без `--live`
-сценарий не обращается к брокеру и не меняет базу; с `--live` нужны токен в
-окружении и явная `--database-url` отдельной тестовой базы. Успех mock —
+сценарий не обращается к брокеру и не меняет базу; с `--live` нужны
+`FINAM_API_TOKEN` и `FINAM_ACCEPTANCE_DATABASE_URL` в окружении процесса, не в
+аргументах. Рабочий `DATABASE_URL` сценарий не подхватывает. Успех mock —
 `MOCK_PASSED`, не `LIVE_VERIFIED`. Обычный `collect` по-прежнему может дать
 код 0 при `PARTIAL`; сценарий приёмки требует `READY` и полную цепочку до
 совпадения CSV/manifest. Методов торговли и создания заявок в адаптере нет.
@@ -208,11 +209,12 @@ python -m worker collect --provider offline --symbols AAPL,MSFT,NVDA --start 202
 pytest -q tests/test_finam_adapter.py tests/test_finam_live_smoke.py
 ```
 
-Будущий ручной live-запуск на отдельной тестовой базе (токен только в env):
+Будущий ручной live-запуск на отдельной тестовой базе. Токен и URL базы уже
+заданы в окружении (`FINAM_API_TOKEN`, `FINAM_ACCEPTANCE_DATABASE_URL`) и в
+команду не входят:
 
 ```bash
 python scripts/finam_live_smoke.py --live \
-  --database-url "$FINAM_ACCEPTANCE_DATABASE_URL" \
   --start 2026-10-12 \
   --end 2026-10-17 \
   --output-dir datasets/finam-live-smoke-2026-10-12

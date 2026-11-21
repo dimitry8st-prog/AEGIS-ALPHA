@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from datetime import date
 from pathlib import Path
@@ -143,6 +144,7 @@ async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, t
             secrets=(SECRET, JWT, database_url),
         )
     assert report["status"] == smoke.STATUS_MOCK_PASSED, report.get("failure_reason")
+    assert smoke.acceptance_exit_code(report) == 0
     assert report["status"] != smoke.STATUS_LIVE_VERIFIED
     assert report["mode"] == "mock"
     assert report["failure_reason"] is None
@@ -160,37 +162,47 @@ async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, t
     assert requests  # mock HTTP happened inside the chain
 
 
+def _must_not_build(*_args, **_kwargs):
+    raise AssertionError("live resources must not be created")
+
+
 @pytest.mark.asyncio
 async def test_cli_without_live_touches_neither_http_nor_database(
     migrated_engine, monkeypatch, tmp_path
 ):
     await _clean(migrated_engine)
     before = await _quote_total(migrated_engine)
-    monkeypatch.delenv("FINAM_API_TOKEN", raising=False)
-
-    def boom(request):
-        raise AssertionError("HTTP must not be called without --live")
-
-    monkeypatch.setattr(
-        FinamAdapter,
-        "fetch_daily",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("adapter must not run")),
+    monkeypatch.setenv("FINAM_API_TOKEN", SECRET)
+    monkeypatch.setenv(
+        "FINAM_ACCEPTANCE_DATABASE_URL",
+        "postgresql://acceptance:super-secret-db-pass@127.0.0.1:1/aegis_finam_acceptance",
     )
-    code, report = await smoke.async_main(
-        [
-            "--start",
-            "2024-01-09",
-            "--end",
-            "2024-01-11",
-            "--output-dir",
-            str(tmp_path / "dry"),
-        ]
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://worker:working-database-password@127.0.0.1:5432/aegis",
     )
+    monkeypatch.setattr(smoke, "create_engine", _must_not_build)
+    monkeypatch.setattr(smoke, "FinamAdapter", _must_not_build)
+    argv = [
+        "--start",
+        "2024-01-09",
+        "--end",
+        "2024-01-11",
+        "--output-dir",
+        str(tmp_path / "dry"),
+    ]
+    assert "--live" not in argv
+    assert SECRET not in argv
+    code, report = await smoke.async_main(argv)
     assert code == 2
     assert report["status"] == smoke.STATUS_NOT_LIVE
     assert report["mode"] == "dry"
     assert await _quote_total(migrated_engine) == before
     assert not (tmp_path / "dry").exists()
+    dumped = json.dumps(report)
+    assert SECRET not in dumped
+    assert "super-secret-db-pass" not in dumped
+    assert "working-database-password" not in dumped
 
 
 @pytest.mark.asyncio
@@ -198,31 +210,42 @@ async def test_cli_live_without_token_is_not_configured(monkeypatch, tmp_path, m
     await _clean(migrated_engine)
     before = await _quote_total(migrated_engine)
     monkeypatch.delenv("FINAM_API_TOKEN", raising=False)
-    code, report = await smoke.async_main(
-        [
-            "--live",
-            "--database-url",
-            "postgresql://acceptance:acceptance@127.0.0.1:55432/aegis_stage",
-            "--start",
-            "2024-01-09",
-            "--end",
-            "2024-01-11",
-            "--output-dir",
-            str(tmp_path / "live-missing-token"),
-        ]
+    monkeypatch.setenv(
+        "FINAM_ACCEPTANCE_DATABASE_URL",
+        "postgresql://acceptance:super-secret-db-pass@127.0.0.1:55432/aegis_finam_acceptance",
     )
+    monkeypatch.setattr(smoke, "create_engine", _must_not_build)
+    monkeypatch.setattr(smoke, "FinamAdapter", _must_not_build)
+    argv = [
+        "--live",
+        "--start",
+        "2024-01-09",
+        "--end",
+        "2024-01-11",
+        "--output-dir",
+        str(tmp_path / "live-missing-token"),
+    ]
+    assert SECRET not in argv
+    assert "super-secret-db-pass" not in argv
+    code, report = await smoke.async_main(argv)
     assert code == 2
     assert report["status"] == smoke.STATUS_NOT_CONFIGURED
     assert "FINAM_API_TOKEN" in report["failure_reason"]
     assert await _quote_total(migrated_engine) == before
     dumped = json.dumps(report)
-    assert "acceptance:acceptance" not in dumped
+    assert "super-secret-db-pass" not in dumped
 
 
 @pytest.mark.asyncio
 async def test_cli_live_without_explicit_database_url(monkeypatch, tmp_path):
     monkeypatch.setenv("FINAM_API_TOKEN", SECRET)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://should-not:use@127.0.0.1:5432/aegis")
+    monkeypatch.delenv("FINAM_ACCEPTANCE_DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://should-not:working-database-password@127.0.0.1:5432/aegis",
+    )
+    monkeypatch.setattr(smoke, "create_engine", _must_not_build)
+    monkeypatch.setattr(smoke, "FinamAdapter", _must_not_build)
     code, report = await smoke.async_main(
         [
             "--live",
@@ -236,9 +259,11 @@ async def test_cli_live_without_explicit_database_url(monkeypatch, tmp_path):
     )
     assert code == 2
     assert report["status"] == smoke.STATUS_NOT_CONFIGURED
-    assert "--database-url" in report["failure_reason"]
-    assert "should-not:use" not in json.dumps(report)
-    assert SECRET not in json.dumps(report)
+    assert "FINAM_ACCEPTANCE_DATABASE_URL" in report["failure_reason"]
+    assert "DATABASE_URL is not used" in report["failure_reason"]
+    dumped = json.dumps(report)
+    assert "working-database-password" not in dumped
+    assert SECRET not in dumped
 
 
 @pytest.mark.asyncio
@@ -267,11 +292,13 @@ async def test_partial_empty_or_missing_ticker_fails_acceptance(
             secrets=(SECRET,),
         )
     assert report["status"] == smoke.STATUS_FAILED
+    assert smoke.acceptance_exit_code(report) != 0
     assert report["status"] != smoke.STATUS_LIVE_VERIFIED
     assert report["failure_reason"]
     first = next(stage for stage in report["stages"] if stage["name"] == "first_collect_ready")
     assert first["ok"] is False
-    assert first["detail"]["status"] in {"PARTIAL", "FAILED"}
+    assert first["detail"]["status"] == "PARTIAL"
+    assert reason_part == "PARTIAL"
 
 
 @pytest.mark.asyncio
@@ -302,13 +329,14 @@ async def test_auth_rate_limit_and_timeout_fail_without_leaking_secrets(
             secrets=(SECRET, JWT, database_url),
         )
     assert report["status"] == smoke.STATUS_FAILED
+    assert smoke.acceptance_exit_code(report) != 0
     dumped = json.dumps(report)
     assert SECRET not in dumped and JWT not in dumped
     first = next(stage for stage in report["stages"] if stage["name"] == "first_collect_ready")
     assert first["ok"] is False
     # Pipeline marks unavailable symbols; acceptance must not treat this as success.
-    assert first["detail"]["status"] in {"FAILED", "PARTIAL"}
-    assert code_fragment in dumped or first["detail"]["status"] == "FAILED"
+    assert first["detail"]["status"] == "FAILED"
+    assert code_fragment in dumped
 
 
 @pytest.mark.asyncio
@@ -331,9 +359,12 @@ async def test_repeat_collect_creates_neither_quotes_nor_revisions(
     stage = next(
         item for item in report["stages"] if item["name"] == "repeat_collect_duplicates_only"
     )
+    assert report["status"] == smoke.STATUS_MOCK_PASSED
+    assert smoke.acceptance_exit_code(report) == 0
     assert stage["ok"] is True
     assert stage["detail"]["counters"]["inserted"] == 0
     assert stage["detail"]["counters"]["updated"] == 0
+    assert stage["detail"]["counters"]["duplicates"] == stage["detail"]["counters"]["received"]
     assert stage["detail"]["revisions_after_repeat"] == stage["detail"]["revisions_before_repeat"]
     assert await _quote_total(migrated_engine) == 4
 
@@ -359,6 +390,7 @@ async def test_csv_manifest_mismatch_is_detected(migrated_engine, database_url, 
     check = smoke.verify_export_artifacts(target)
     assert check["ok"] is False
     assert check["checks"]["sha256_match"] is False
+    assert smoke.acceptance_exit_code({"status": smoke.STATUS_FAILED, "stages": []}) != 0
 
 
 @pytest.mark.asyncio
@@ -429,4 +461,107 @@ async def test_successful_mock_never_sets_live_verified(migrated_engine, databas
             secrets=(SECRET,),
         )
     assert report["status"] == smoke.STATUS_MOCK_PASSED
+    assert smoke.acceptance_exit_code(report) == 0
     assert smoke.STATUS_LIVE_VERIFIED not in json.dumps(report)
+
+
+def test_parser_does_not_accept_secrets_as_arguments():
+    parser = smoke.build_parser()
+    dests = {action.dest for action in parser._actions}
+    assert "database_url" not in dests
+    assert "token" not in dests
+    assert "password" not in dests
+    help_text = " ".join(parser.format_help().split())
+    assert "--database-url" not in help_text
+    assert "--token" not in help_text
+    assert "--password" not in help_text
+    assert "FINAM_API_TOKEN" in help_text
+    assert "FINAM_ACCEPTANCE_DATABASE_URL" in help_text
+    assert "DATABASE_URL is not read" in help_text
+
+
+@pytest.mark.asyncio
+async def test_one_symbol_and_empty_window_exit_nonzero_without_broker(monkeypatch, tmp_path):
+    monkeypatch.setenv("FINAM_API_TOKEN", SECRET)
+    monkeypatch.setenv(
+        "FINAM_ACCEPTANCE_DATABASE_URL",
+        "postgresql://acceptance:super-secret-db-pass@127.0.0.1:1/aegis_finam_acceptance",
+    )
+    monkeypatch.setattr(smoke, "create_engine", _must_not_build)
+    monkeypatch.setattr(smoke, "FinamAdapter", _must_not_build)
+    one_symbol, one_report = await smoke.async_main(
+        [
+            "--live",
+            "--symbols",
+            "GAZP",
+            "--start",
+            "2024-01-09",
+            "--end",
+            "2024-01-11",
+            "--output-dir",
+            str(tmp_path / "one-symbol"),
+        ]
+    )
+    assert one_symbol != 0
+    assert one_report["status"] == smoke.STATUS_FAILED
+    empty_window, empty_report = await smoke.async_main(
+        [
+            "--live",
+            "--start",
+            "2024-01-11",
+            "--end",
+            "2024-01-11",
+            "--output-dir",
+            str(tmp_path / "empty-window"),
+        ]
+    )
+    assert empty_window != 0
+    assert empty_report["status"] == smoke.STATUS_FAILED
+    dumped = json.dumps({"one": one_report, "empty": empty_report})
+    assert SECRET not in dumped
+    assert "super-secret-db-pass" not in dumped
+
+
+def test_live_uses_acceptance_url_and_hides_secrets_from_logs(monkeypatch, caplog, capsys):
+    acceptance = "postgresql://acceptance:super-secret-db-pass@127.0.0.1:1/aegis_finam_acceptance"
+    decoy = "postgresql://should-not:working-database-password@127.0.0.1:5432/aegis"
+    monkeypatch.setenv("FINAM_API_TOKEN", SECRET)
+    monkeypatch.setenv("FINAM_ACCEPTANCE_DATABASE_URL", acceptance)
+    monkeypatch.setenv("DATABASE_URL", decoy)
+    used: list[str] = []
+
+    def fake_create(settings):
+        used.append(settings.DATABASE_URL)
+        logging.getLogger("finam.acceptance.test").error(
+            "dsn %s token %s bearer %s",
+            settings.DATABASE_URL,
+            SECRET,
+            JWT,
+        )
+        raise RuntimeError(f"connect failed {settings.DATABASE_URL} token {SECRET} bearer {JWT}")
+
+    monkeypatch.setattr(smoke, "create_engine", fake_create)
+    argv = [
+        "--live",
+        "--start",
+        "2024-01-09",
+        "--end",
+        "2024-01-11",
+        "--output-dir",
+        "datasets/finam-live-smoke-should-not-run",
+    ]
+    assert SECRET not in argv
+    assert "super-secret-db-pass" not in argv
+    with caplog.at_level(logging.ERROR):
+        code = smoke.main(argv)
+    assert used == [acceptance]
+    assert code == 2
+    printed = capsys.readouterr().out
+    assert SECRET not in printed
+    assert JWT not in printed
+    assert "super-secret-db-pass" not in printed
+    assert "working-database-password" not in printed
+    assert SECRET not in caplog.text
+    assert JWT not in caplog.text
+    assert "super-secret-db-pass" not in caplog.text
+    assert "working-database-password" not in caplog.text

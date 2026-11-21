@@ -1,0 +1,26 @@
+# Local secrets stay out of the build context. .env.example is the template.
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+credentials.json
+secrets/
+.netrc
+
+# Local tooling and generated artifacts. Source, Dockerfile, and .env.example remain.
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+*.log
+datasets

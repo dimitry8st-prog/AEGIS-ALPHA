@@ -4,6 +4,11 @@ Real broker calls require ``--live``. Without that flag the CLI does not
 contact Finam and does not change the database. Mock verification is driven by
 pytest with ``httpx.MockTransport`` and an explicitly supplied test database.
 
+The API secret and the acceptance database URL come from the process
+environment (``FINAM_API_TOKEN``, ``FINAM_ACCEPTANCE_DATABASE_URL``). They are
+not CLI arguments. ``DATABASE_URL`` is not a fallback. This script does not
+read ``.env``.
+
 Exit 0 is allowed only after every acceptance stage passes. Ordinary
 ``python -m worker collect`` may still exit 0 on PARTIAL; this scenario does not.
 Successful mock runs report ``MOCK_PASSED``, never ``LIVE_VERIFIED``.
@@ -15,6 +20,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -22,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from sqlalchemy import text
@@ -52,6 +58,8 @@ _SECRET_KEYS = re.compile(
     re.IGNORECASE,
 )
 _URL_WITH_CREDS = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
+_BEARER = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
+ACCEPTANCE_DATABASE_ENV = "FINAM_ACCEPTANCE_DATABASE_URL"
 
 
 @dataclass(frozen=True)
@@ -76,14 +84,79 @@ def redact(value: Any, secrets: tuple[str, ...] = ()) -> Any:
         return out
     if isinstance(value, list):
         return [redact(item, secrets) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact(item, secrets) for item in value)
     if isinstance(value, str):
         text_value = value
         for secret in secrets:
             if secret and secret in text_value:
                 text_value = text_value.replace(secret, "[redacted]")
         text_value = _URL_WITH_CREDS.sub("://[redacted]@", text_value)
+        text_value = _BEARER.sub("Bearer [redacted]", text_value)
         return text_value
     return value
+
+
+def acceptance_exit_code(report: dict[str, Any]) -> int:
+    """0 only when every acceptance stage passed."""
+    if report.get("status") in {STATUS_MOCK_PASSED, STATUS_LIVE_VERIFIED}:
+        return 0
+    return 2
+
+
+class _SecretLogFilter(logging.Filter):
+    def __init__(self, secrets: tuple[str, ...]):
+        super().__init__()
+        self._secrets = tuple(item for item in secrets if item)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg)
+        record.msg = redact(message, self._secrets)
+        record.args = ()
+        return True
+
+
+class _LogGuard:
+    """Scrub secrets from library logs for the duration of one CLI run.
+
+    A filter on the root logger does not see records emitted by child loggers.
+    The same filter is therefore attached to handlers that already exist
+    (including the test capture handler) before any broker or database call.
+    """
+
+    def __init__(self, secrets: tuple[str, ...]):
+        self._filter = _SecretLogFilter(secrets)
+        self._previous: list[tuple[logging.Logger, int]] = []
+        self._handlers: list[logging.Handler] = []
+
+    def install(self) -> "_LogGuard":
+        names = ("", "httpx", "httpcore", "sqlalchemy", "sqlalchemy.engine", "asyncpg")
+        seen_handlers: set[int] = set()
+        for name in names:
+            logger = logging.getLogger() if name == "" else logging.getLogger(name)
+            self._previous.append((logger, logger.level))
+            logger.addFilter(self._filter)
+            for handler in logger.handlers:
+                if id(handler) in seen_handlers:
+                    continue
+                handler.addFilter(self._filter)
+                self._handlers.append(handler)
+                seen_handlers.add(id(handler))
+            if name:
+                logger.setLevel(logging.WARNING)
+        return self
+
+    def close(self) -> None:
+        for logger, level in self._previous:
+            logger.removeFilter(self._filter)
+            logger.setLevel(level)
+        for handler in self._handlers:
+            handler.removeFilter(self._filter)
+        self._previous.clear()
+        self._handlers.clear()
 
 
 def safe_db_label(database_url: str) -> str:
@@ -93,6 +166,19 @@ def safe_db_label(database_url: str) -> str:
     port = f":{parsed.port}" if parsed.port else ""
     path = parsed.path or ""
     return f"{host}{port}{path}"
+
+
+def _url_secrets(database_url: str | None) -> tuple[str, ...]:
+    if not database_url:
+        return ()
+    found = [database_url]
+    password = urlparse(database_url).password
+    if password and len(password) >= 8:
+        found.append(password)
+        decoded = unquote(password)
+        if decoded != password and len(decoded) >= 8:
+            found.append(decoded)
+    return tuple(found)
 
 
 def _parse_date(value: str) -> date:
@@ -247,10 +333,11 @@ async def run_acceptance_chain(
         raise ValueError("end must be after start (exclusive end)")
 
     worker_settings = settings or WorkerSettings(
-        DATABASE_URL="postgresql://acceptance:acceptance@127.0.0.1:1/unused",
+        DATABASE_URL="postgresql://127.0.0.1:1/unused",
         IO_RETRY_WAIT_SECONDS=0.01,
         IO_MAX_ATTEMPTS=3,
         RUN_DEADLINE_SECONDS=120,
+        FINAM_API_TOKEN=None,
     )
     pipeline = MarketDataPipeline(adapter, QuoteRepository(engine), worker_settings)
     stages: list[StageResult] = []
@@ -524,18 +611,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Strict Finam acceptance: collect → repeat → export CSV/manifest. "
-            "Real broker access requires --live and FINAM_API_TOKEN."
+            "Real broker access requires --live. "
+            f"FINAM_API_TOKEN and {ACCEPTANCE_DATABASE_ENV} belong in the process "
+            "environment, never in arguments. DATABASE_URL is not read."
         )
     )
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Contact Finam with FINAM_API_TOKEN and write to the explicit test database",
-    )
-    parser.add_argument(
-        "--database-url",
-        default=None,
-        help="Explicit PostgreSQL URL for a separate test database (required with --live)",
+        help=(
+            "Contact Finam and write to the database named by "
+            f"{ACCEPTANCE_DATABASE_ENV}. Do not pass the token or URL as arguments."
+        ),
     )
     parser.add_argument("--start", type=_parse_date, required=True, help="Inclusive start YYYY-MM-DD")
     parser.add_argument("--end", type=_parse_date, required=True, help="Exclusive end YYYY-MM-DD")
@@ -553,37 +640,88 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _token_from_env() -> str | None:
-    value = os.environ.get("FINAM_API_TOKEN")
+def _env_text(name: str) -> str | None:
+    value = os.environ.get(name)
     if value is None:
         return None
     stripped = value.strip()
     return stripped or None
 
 
+def _token_from_env() -> str | None:
+    return _env_text("FINAM_API_TOKEN")
+
+
+def _acceptance_database_url() -> str | None:
+    """Separate test database. Never falls back to DATABASE_URL or .env."""
+    return _env_text(ACCEPTANCE_DATABASE_ENV)
+
+
+def _known_secrets() -> tuple[str, ...]:
+    parts: list[str] = []
+    token = _token_from_env()
+    if token:
+        parts.append(token)
+    parts.extend(_url_secrets(_acceptance_database_url()))
+    # Scrub the working URL if a library logs it, without using it as a connection.
+    parts.extend(_url_secrets(_env_text("DATABASE_URL")))
+    unique: list[str] = []
+    for item in parts:
+        if item and item not in unique:
+            unique.append(item)
+    return tuple(unique)
+
+
 async def async_main(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
+    guard = _LogGuard(_known_secrets()).install()
+    try:
+        return await _async_main(argv)
+    finally:
+        guard.close()
+
+
+async def _async_main(argv: list[str] | None) -> tuple[int, dict[str, Any]]:
     parser = build_parser()
     args = parser.parse_args(argv)
+    window = {"start": args.start.isoformat(), "end": args.end.isoformat()}
+
+    if not args.live:
+        report = {
+            "mode": "dry",
+            "status": STATUS_NOT_LIVE,
+            "provider": PROVIDER,
+            "symbols": args.symbols,
+            "adjustment_mode": ADJUSTMENT,
+            "window": window,
+            "output_dir": str(args.output_dir),
+            "stages": [],
+            "failure_reason": (
+                "Real Finam calls require --live. Without it this scenario does "
+                "not contact the broker and does not change the database."
+            ),
+        }
+        return acceptance_exit_code(report), redact(report, _known_secrets())
+
     try:
         symbols = _parse_symbols(args.symbols)
     except ValueError as exc:
         report = {
-            "mode": "live" if args.live else "dry",
+            "mode": "live",
             "status": STATUS_FAILED,
             "provider": PROVIDER,
             "symbols": args.symbols,
             "adjustment_mode": ADJUSTMENT,
-            "window": {"start": args.start.isoformat(), "end": args.end.isoformat()},
+            "window": window,
             "stages": [],
             "failure_reason": str(exc),
         }
-        return 2, report
+        return acceptance_exit_code(report), redact(report, _known_secrets())
 
     base = {
         "provider": PROVIDER,
         "symbols": symbols,
         "adjustment_mode": ADJUSTMENT,
-        "window": {"start": args.start.isoformat(), "end": args.end.isoformat()},
+        "window": window,
         "output_dir": str(args.output_dir),
         "stages": [],
         "ticker_counts": {},
@@ -595,17 +733,14 @@ async def async_main(argv: list[str] | None = None) -> tuple[int, dict[str, Any]
         ],
     }
 
-    if not args.live:
+    if args.end <= args.start:
         report = {
             **base,
-            "mode": "dry",
-            "status": STATUS_NOT_LIVE,
-            "failure_reason": (
-                "Real Finam calls require --live. Without it this scenario does "
-                "not contact the broker and does not change the database."
-            ),
+            "mode": "live",
+            "status": STATUS_FAILED,
+            "failure_reason": "end must be after start (exclusive end)",
         }
-        return 2, report
+        return acceptance_exit_code(report), redact(report, _known_secrets())
 
     token = _token_from_env()
     if not token:
@@ -613,65 +748,70 @@ async def async_main(argv: list[str] | None = None) -> tuple[int, dict[str, Any]
             **base,
             "mode": "live",
             "status": STATUS_NOT_CONFIGURED,
-            "failure_reason": "FINAM_API_TOKEN is missing or empty in the local environment",
+            "failure_reason": "FINAM_API_TOKEN is missing or empty in the process environment",
         }
-        return 2, report
+        return acceptance_exit_code(report), redact(report, _known_secrets())
 
-    if not args.database_url:
+    database_url = _acceptance_database_url()
+    if not database_url:
         report = {
             **base,
             "mode": "live",
             "status": STATUS_NOT_CONFIGURED,
             "failure_reason": (
-                "Explicit --database-url for a separate test database is required; "
+                f"{ACCEPTANCE_DATABASE_ENV} is required for a separate test database; "
                 "DATABASE_URL is not used as an implicit fallback"
             ),
         }
-        return 2, report
+        return acceptance_exit_code(report), redact(report, _known_secrets())
 
-    # Never pass env DATABASE_URL into WorkerSettings for this scenario.
+    # Init arguments win over the process environment, including DATABASE_URL.
     settings = WorkerSettings(
-        DATABASE_URL=args.database_url,
+        DATABASE_URL=database_url,
         IO_RETRY_WAIT_SECONDS=0.5,
         FINAM_API_TOKEN=None,
     )
+    if settings.DATABASE_URL != database_url:
+        report = {
+            **base,
+            "mode": "live",
+            "status": STATUS_FAILED,
+            "failure_reason": f"{ACCEPTANCE_DATABASE_ENV} was not applied to the worker settings",
+        }
+        return acceptance_exit_code(report), redact(report, _known_secrets())
+
+    secrets = _known_secrets()
     engine = create_engine(settings)
-    adapter = FinamAdapter(api_token=token)
     try:
-        report = await run_acceptance_chain(
-            adapter=adapter,
-            engine=engine,
-            symbols=symbols,
-            start=args.start,
-            end=args.end,
-            output_dir=args.output_dir,
-            mode="live",
-            settings=settings,
-            secrets=(token, args.database_url),
-        )
-        report["database"] = safe_db_label(args.database_url)
+        adapter = FinamAdapter(api_token=token)
+        try:
+            report = await run_acceptance_chain(
+                adapter=adapter,
+                engine=engine,
+                symbols=symbols,
+                start=args.start,
+                end=args.end,
+                output_dir=args.output_dir,
+                mode="live",
+                settings=settings,
+                secrets=secrets,
+            )
+            report["database"] = safe_db_label(database_url)
+            report = redact(report, secrets)
+        finally:
+            close = getattr(adapter, "aclose", None)
+            if close is not None:
+                await close()
     finally:
         await engine.dispose()
-        close = getattr(adapter, "aclose", None)
-        if close is not None:
-            await close()
 
-    code = 0 if report.get("status") == STATUS_LIVE_VERIFIED else 2
-    return code, report
+    return acceptance_exit_code(report), report
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         code, report = asyncio.run(async_main(argv))
     except Exception as exc:  # noqa: BLE001 — CLI must never leak secrets
-        token = _token_from_env() or ""
-        db_url = ""
-        if argv:
-            try:
-                preview = build_parser().parse_args(argv)
-                db_url = preview.database_url or ""
-            except SystemExit:
-                db_url = ""
         failure = redact(
             {
                 "mode": "live" if (argv and "--live" in argv) else "dry",
@@ -679,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
                 "provider": PROVIDER,
                 "failure_reason": f"{type(exc).__name__}: {exc}"[:500],
             },
-            secrets=tuple(item for item in (token, db_url) if item),
+            secrets=_known_secrets(),
         )
         print(json.dumps(failure, ensure_ascii=False, indent=2))
         return 2
