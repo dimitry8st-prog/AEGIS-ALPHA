@@ -33,6 +33,11 @@ $runtime = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'AEG
 $null = New-Item -ItemType Directory -Path $runtime -Force
 $credential = Join-Path $runtime 'finam-key.dpapi'
 $log = Join-Path $runtime 'latest.log'
+$runner = Join-Path $runtime ("run-" + $Revision.Substring(0, 12) + ".ps1")
+$powerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
+if (-not (Test-Path -LiteralPath $powerShell -PathType Leaf)) {
+    throw 'The Windows PowerShell system executable was not found.'
+}
 if ($ReplaceKey -or -not (Test-Path -LiteralPath $credential -PathType Leaf)) {
     $key = Read-Host 'Finam API key for daily collection (hidden input)' -AsSecureString
     try {
@@ -77,16 +82,25 @@ exit $exitCode
 '@
 $payload = $payload.Replace('__REPO__', $repo.Replace("'", "''")).Replace('__REVISION__', $Revision)
 $payload = $payload.Replace('__CREDENTIAL__', $credential.Replace("'", "''")).Replace('__LOG__', $log.Replace("'", "''"))
-$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
-$powerShell = (Get-Command powershell.exe -CommandType Application).Source
-$action = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded" -WorkingDirectory $repo
+[IO.File]::WriteAllText($runner, $payload)
+$bootstrap = @'
+try {
+    & ([scriptblock]::Create([IO.File]::ReadAllText('__RUNNER__')))
+} catch {
+    [IO.File]::WriteAllText('__LOG__', "ERROR: " + $_.Exception.Message + [Environment]::NewLine + 'Collection state: FAILED')
+    exit 1
+}
+'@
+$bootstrap = $bootstrap.Replace('__RUNNER__', $runner.Replace("'", "''")).Replace('__LOG__', $log.Replace("'", "''"))
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+$action = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded" -WorkingDirectory $runtime
 
 $now = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(3))
 $first = [DateTimeOffset]::new($now.Year, $now.Month, $now.Day, 8, 30, 0, $now.Offset)
 if ($first -le $now) { $first = $first.AddDays(1) }
 $trigger = New-ScheduledTaskTrigger -Daily -At $first.LocalDateTime
 $trigger.StartBoundary = $first.ToString("yyyy-MM-dd'T'HH:mm:sszzz", [Globalization.CultureInfo]::InvariantCulture)
-$userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$userId = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
@@ -105,6 +119,24 @@ for ($attempt = 0; $attempt -lt 45; $attempt++) {
             $result | Write-Host
             return
         }
+    }
+    $task = Get-ScheduledTask -TaskName $taskName -TaskPath '\'
+    $info = Get-ScheduledTaskInfo -InputObject $task
+    if ($task.State -eq 'Ready' -and $info.LastRunTime.ToUniversalTime() -ge $started.AddSeconds(-1) -and $info.LastTaskResult -ne 0) {
+        Write-Host ('Task Scheduler result: 0x{0:X8}' -f [uint32] $info.LastTaskResult)
+        try {
+            Get-WinEvent -FilterHashtable @{
+                LogName = 'Microsoft-Windows-TaskScheduler/Operational'
+                StartTime = $started.ToLocalTime().AddSeconds(-1)
+                Level = 1, 2, 3
+            } -ErrorAction Stop |
+                Where-Object { $_.Message -like "*$taskName*" } |
+                Select-Object -First 3 -ExpandProperty Message |
+                Write-Host
+        } catch {
+            Write-Host 'The Task Scheduler Operational log had no accessible error events.'
+        }
+        return
     }
     Start-Sleep -Seconds 1
 }
