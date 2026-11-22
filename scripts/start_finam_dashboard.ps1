@@ -34,6 +34,16 @@ function Test-Dashboard([string] $BaseUrl) {
     }
 }
 
+function Get-DatabaseUrl([string] $Password) {
+    $encoded = [uri]::EscapeDataString($Password)
+    return "postgresql+asyncpg://${dbUser}:${encoded}@127.0.0.1:$dbPort/$dbName"
+}
+
+function Test-Database([string] $Password) {
+    [Environment]::SetEnvironmentVariable('DATABASE_URL', (Get-DatabaseUrl $Password), 'Process')
+    return Invoke-Checked $python @('scripts/check_dashboard_database.py')
+}
+
 $repo = (Resolve-Path -LiteralPath $Repository).Path
 $composeFile = Join-Path $repo 'docker-compose.yml'
 $python = Join-Path $repo '.venv/Scripts/python.exe'
@@ -66,12 +76,25 @@ if (Test-Path -LiteralPath $envFile -PathType Leaf) {
 }
 Invoke-Checked docker ($compose + @('up', '-d', '--no-recreate', '--wait', '--wait-timeout', '90', 'postgres', 'redis'))
 $composeConfig = ((Invoke-Checked docker ($compose + @('config', '--format', 'json'))) -join "`n") | ConvertFrom-Json
-$postgres = $composeConfig.services.postgres.environment
+$configuredPostgres = $composeConfig.services.postgres.environment
 $app = $composeConfig.services.app.environment
+$postgresId = Invoke-Checked docker ($compose + @('ps', '-q', 'postgres'))
+if ($postgresId -notmatch '^[0-9a-f]{12,64}$') {
+    throw 'A single running PostgreSQL container was not found in the AEGIS Compose project.'
+}
+$runtimeEnv = ((Invoke-Checked docker @('inspect', '--format', '{{json .Config.Env}}', $postgresId)) -join "`n") | ConvertFrom-Json
+$postgres = @{}
+foreach ($setting in $runtimeEnv) {
+    if ($setting -match '^(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB)=(.*)$') {
+        $postgres[$Matches[1]] = $Matches[2]
+    }
+}
+if (-not $postgres.POSTGRES_USER -or -not $postgres.POSTGRES_DB) {
+    throw 'The running PostgreSQL container has no configured user or database.'
+}
 $dbPort = Get-ComposePort postgres 5432
 $redisPort = Get-ComposePort redis 6379
 $dbUser = [uri]::EscapeDataString($postgres.POSTGRES_USER)
-$dbPassword = [uri]::EscapeDataString($postgres.POSTGRES_PASSWORD)
 $dbName = [uri]::EscapeDataString($postgres.POSTGRES_DB)
 
 $runtime = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "AEGIS/dashboard/$shortRevision"
@@ -82,7 +105,7 @@ $stdoutLog = Join-Path $runtime 'api.out.log'
 $stderrLog = Join-Path $runtime 'api.err.log'
 
 $environment = @{
-    DATABASE_URL = "postgresql://${dbUser}:${dbPassword}@127.0.0.1:$dbPort/$dbName"
+    DATABASE_URL = $null
     REDIS_URL = "redis://127.0.0.1:$redisPort/0"
     JWT_SECRET_KEY = $app.JWT_SECRET_KEY
     JWT_ALGORITHM = $app.JWT_ALGORITHM
@@ -102,6 +125,35 @@ try {
         $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         [Environment]::SetEnvironmentVariable($name, $environment[$name], 'Process')
     }
+    $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
+    if ($dbStatus -eq '28P01' -and $configuredPostgres.POSTGRES_USER -ceq $postgres.POSTGRES_USER -and
+        $configuredPostgres.POSTGRES_DB -ceq $postgres.POSTGRES_DB -and
+        $configuredPostgres.POSTGRES_PASSWORD -cne $postgres.POSTGRES_PASSWORD) {
+        $dbStatus = Test-Database $configuredPostgres.POSTGRES_PASSWORD
+    }
+    if ($dbStatus -eq '28P01') {
+        Write-Host 'PostgreSQL rejected the configured login (28P01).'
+        $dbSecure = Read-Host 'Existing AEGIS PostgreSQL password (hidden input)' -AsSecureString
+        try {
+            if ($dbSecure.Length -eq 0) { throw 'The existing PostgreSQL password is required.' }
+            $dbStatus = Test-Database (([pscredential]::new('postgres', $dbSecure)).GetNetworkCredential().Password)
+        } finally {
+            $dbSecure.Dispose()
+        }
+    }
+    if ($dbStatus -ne 'READY') {
+        $detail = switch ($dbStatus) {
+            '28P01' { 'PostgreSQL rejected the existing login.' }
+            '28000' { 'PostgreSQL does not allow this user or connection.' }
+            '3D000' { 'The configured database does not exist in PostgreSQL.' }
+            '42501' { 'The configured user does not have access to the database.' }
+            'TIMEOUT' { 'PostgreSQL did not answer on the published Docker port.' }
+            'UNREACHABLE' { 'The published Docker port could not be reached.' }
+            default { 'PostgreSQL connection check failed.' }
+        }
+        throw "$detail Status: $dbStatus. Endpoint: 127.0.0.1:$dbPort."
+    }
+    Write-Host "PostgreSQL: READY on 127.0.0.1:$dbPort"
     $bcryptVersion = Invoke-Checked $python @(
         '-c', "from importlib.metadata import version, packages_distributions; print(version('bcrypt') if 'bcrypt' in packages_distributions() else 'missing')"
     )
