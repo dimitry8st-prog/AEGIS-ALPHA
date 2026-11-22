@@ -18,6 +18,7 @@ from worker.adapters.moex_adapter import MoexAdapter
 from worker.adapters.finam_adapter import FinamAdapter
 from worker.config import WorkerSettings
 from worker.export import ExportError, export_quotes
+from worker.finam_schedule import run_finam_schedule
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
 from worker.types import AdjustmentMode
@@ -73,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--output-dir", required=True, type=Path)
 
     sub.add_parser("portfolio", help="Show the GAZP/GMKN research watchlist (no brokerage positions)")
+    sub.add_parser("finam-daily", help="Collect Finam daily candles at 08:30 Moscow time until stopped")
     return p
 
 
@@ -137,6 +139,20 @@ async def _run_export(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_finam_daily() -> int:
+    settings = WorkerSettings()
+    token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else ""
+    if not token.strip():
+        print("FINAM_NOT_CONFIGURED: FINAM_API_TOKEN is required.", file=sys.stderr)
+        return 2
+    engine = create_engine(settings)
+    try:
+        await run_finam_schedule(MarketDataPipeline(FinamAdapter(token), QuoteRepository(engine), settings))
+    finally:
+        await engine.dispose()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -147,6 +163,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "portfolio":
         print(json.dumps(research_portfolio(), ensure_ascii=False, indent=2))
         return 0
+    if args.command == "finam-daily":
+        try:
+            return asyncio.run(_run_finam_daily())
+        except KeyboardInterrupt:
+            return 0
     parser.error(f"unknown command {args.command}")
     return 2
 

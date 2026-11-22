@@ -8,6 +8,8 @@ param(
 
     [switch] $CollectOnly,
 
+    [switch] $DailyCollect,
+
     [string] $CredentialFile
 )
 
@@ -76,16 +78,20 @@ function Test-Database([string] $Password) {
     return Invoke-Checked $python @('scripts/check_dashboard_dependencies.py')
 }
 
-function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays) {
+function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays, [switch] $Daily) {
     $ErrorActionPreference = 'Continue'
-    $endDay = [DateTime]::UtcNow.AddHours(3).Date
-    $start = $endDay.AddDays(-$LookbackDays).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
-    $end = $endDay.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
     if ($Key.Length -eq 0) { throw 'No Finam API key was supplied.' }
     [Environment]::SetEnvironmentVariable(
         'FINAM_API_TOKEN', ([pscredential]::new('finam', $Key)).GetNetworkCredential().Password, 'Process'
     )
     try {
+        if ($Daily) {
+            Invoke-Checked $python @('-m', 'worker', 'finam-daily')
+            return
+        }
+        $endDay = [DateTime]::UtcNow.AddHours(3).Date
+        $start = $endDay.AddDays(-$LookbackDays).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+        $end = $endDay.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
         $reportJson = & $python -m worker collect --provider finam --symbols 'GAZP,GMKN' --adjustment raw --start $start --end $end
         $collectExit = $LASTEXITCODE
     } finally {
@@ -99,6 +105,10 @@ function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays) {
     Write-Host "Finam: READY. Window: [$start, $end). Inserted $($report.counters.inserted), duplicates $($report.counters.duplicates)."
 }
 
+if ($DailyCollect -and ($CollectOnly -or $PSBoundParameters.ContainsKey('CredentialFile'))) {
+    throw 'Use DailyCollect on its own. The daily process asks for the Finam key.'
+}
+$collectionOnly = $CollectOnly -or $DailyCollect
 $usesSavedKey = $CollectOnly -and $PSBoundParameters.ContainsKey('CredentialFile')
 if ($usesSavedKey -and (-not $CredentialFile -or -not (Test-Path -LiteralPath $CredentialFile -PathType Leaf))) {
     throw 'The scheduled Finam credential file is missing.'
@@ -135,7 +145,7 @@ if (Test-Path -LiteralPath $envFile -PathType Leaf) {
     $compose += @('--env-file', $envFile)
 }
 $services = @('postgres')
-if (-not $CollectOnly) { $services += 'redis' }
+if (-not $collectionOnly) { $services += 'redis' }
 Invoke-Checked docker ($compose + @('up', '-d', '--no-recreate', '--wait', '--wait-timeout', '90') + $services)
 $composeConfig = ((Invoke-Checked docker ($compose + @('config', '--format', 'json'))) -join "`n") | ConvertFrom-Json
 $configuredPostgres = $composeConfig.services.postgres.environment
@@ -156,7 +166,7 @@ if (-not $postgres.POSTGRES_USER -or -not $postgres.POSTGRES_DB) {
 }
 $dbPort = Get-PublishedPort ($compose + @('port', 'postgres', '5432'))
 $redisUrl = $null
-if (-not $CollectOnly) {
+if (-not $collectionOnly) {
     $redisPort = Get-PublishedPort ($compose + @('port', 'redis', '6379'))
     $redisUrl = "redis://127.0.0.1:$redisPort/0"
 }
@@ -192,19 +202,19 @@ try {
         [Environment]::SetEnvironmentVariable($name, $environment[$name], 'Process')
     }
     $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
-    $redisStatus = if ($CollectOnly) { 'SKIPPED' } else { Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis') }
+    $redisStatus = if ($collectionOnly) { 'SKIPPED' } else { Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis') }
     $connectionFailures = @('08000', '08001', '08003', '08006', '08P01', 'TIMEOUT', 'UNREACHABLE')
     if ($dbStatus -in $connectionFailures -or $redisStatus -eq 'UNREACHABLE') {
         Write-Host "Direct ports: PostgreSQL $dbStatus, Redis $redisStatus. Opening new loopback ports."
         $ports = Start-DashboardRelay
         $dbPort = $ports.Postgres
-        if (-not $CollectOnly) {
+        if (-not $collectionOnly) {
             $redisPort = $ports.Redis
             [Environment]::SetEnvironmentVariable('REDIS_URL', "redis://127.0.0.1:$redisPort/0", 'Process')
         }
         for ($attempt = 0; $attempt -lt 5; $attempt++) {
             $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
-            if (-not $CollectOnly) {
+            if (-not $collectionOnly) {
                 $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
             }
             if ($dbStatus -notin $connectionFailures -and $redisStatus -in @('READY', 'SKIPPED')) { break }
@@ -240,13 +250,13 @@ try {
         throw "$detail Status: $dbStatus. Endpoint: 127.0.0.1:$dbPort."
     }
     Write-Host "PostgreSQL: READY on 127.0.0.1:$dbPort"
-    if ($CollectOnly) {
+    if ($collectionOnly) {
         $secure = if ($usesSavedKey) {
             (Get-Content -LiteralPath $CredentialFile -Raw).Trim() | ConvertTo-SecureString
         } else {
             Read-Host 'Finam API key (hidden input)' -AsSecureString
         }
-        Invoke-FinamCollection -Key $secure -LookbackDays 7
+        Invoke-FinamCollection -Key $secure -LookbackDays 7 -Daily:$DailyCollect
         return
     }
     if ($redisStatus -ne 'READY') {
