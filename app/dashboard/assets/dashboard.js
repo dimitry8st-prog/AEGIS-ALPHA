@@ -30,6 +30,7 @@ let runs = [];
 let runsTotal = 0;
 let loading = false;
 let loadError = false;
+let registering = false;
 
 function updateNote(message) {
   byId("notice").textContent = message;
@@ -190,21 +191,53 @@ function signOut(message = "") {
   byId("login-form").elements.email.focus();
 }
 
+const loginForm = byId("login-form");
+
+function setRegistrationMode(enabled) {
+  registering = enabled;
+  byId("sign-in-title").textContent = enabled ? "Создать учётную запись" : "Вход в AEGIS";
+  byId("sign-in-description").textContent = enabled
+    ? "Учётная запись для этого экземпляра AEGIS. Используйте пароль от 12 символов."
+    : "Войдите под своей учётной записью AEGIS, чтобы увидеть сохранённые котировки.";
+  byId("login-mode").textContent = enabled ? "Вернуться ко входу" : "Создать учётную запись";
+  loginForm.querySelector('[type="submit"]').textContent = enabled ? "Создать и войти" : "Войти";
+  loginForm.elements.password.autocomplete = enabled ? "new-password" : "current-password";
+  loginForm.elements.password.minLength = enabled ? 12 : 0;
+  byId("login-error").hidden = true;
+}
+
+byId("login-mode").addEventListener("click", () => {
+  setRegistrationMode(!registering);
+  loginForm.elements.password.value = "";
+  loginForm.elements.email.focus();
+});
+
 byId("login-form").addEventListener("submit", async event => {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector("button");
   const error = byId("login-error");
   const payload = { email: form.elements.email.value.trim(), password: form.elements.password.value };
+  if (registering && new TextEncoder().encode(payload.password).length > 72) {
+    error.textContent = "Сократите пароль до 72 байт.";
+    error.hidden = false;
+    return;
+  }
   form.elements.password.value = "";
   submit.disabled = true;
+  byId("login-mode").disabled = true;
   error.hidden = true;
   try {
-    const result = await json(api + "/auth/login", {
+    const options = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
+    };
+    if (registering) {
+      await json(api + "/auth/register", options);
+      setRegistrationMode(false);
+    }
+    const result = await json(api + "/auth/login", options);
     if (typeof result.access_token !== "string" || !result.access_token) throw new Error("Missing session");
     token = result.access_token;
     toggleMarket(true);
@@ -212,6 +245,7 @@ byId("login-form").addEventListener("submit", async event => {
     await load();
   } catch (failure) {
     error.textContent = {
+      400: "Учётная запись с этой почтой уже существует. Вернитесь ко входу.",
       401: "Проверьте адрес почты и пароль.",
       403: "У этой учётной записи нет доступа.",
       422: "Проверьте формат почты и пароля.",
@@ -220,6 +254,7 @@ byId("login-form").addEventListener("submit", async event => {
     error.hidden = false;
   } finally {
     submit.disabled = false;
+    byId("login-mode").disabled = false;
   }
 });
 

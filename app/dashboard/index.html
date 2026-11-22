@@ -49,7 +49,7 @@
       <section class="panel sign-in" id="sign-in" aria-labelledby="sign-in-title">
         <div>
           <h2 id="sign-in-title">Вход в AEGIS</h2>
-          <p>Войдите под своей учётной записью AEGIS, чтобы увидеть сохранённые котировки.</p>
+          <p id="sign-in-description">Войдите под своей учётной записью AEGIS, чтобы увидеть сохранённые котировки.</p>
         </div>
         <form id="login-form" method="post" action="/dashboard" hidden>
           <label>Эл. почта
@@ -59,6 +59,7 @@
             <input name="password" type="password" autocomplete="current-password" required>
           </label>
           <button class="button primary" type="submit">Войти</button>
+          <button class="button ghost" id="login-mode" type="button">Создать учётную запись</button>
           <p id="login-error" role="alert" class="form-error" hidden></p>
         </form>
       </section>
