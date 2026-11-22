@@ -130,7 +130,9 @@ async def _quote_total(engine) -> int:
 async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, tmp_path):
     await _clean(migrated_engine)
     requests: list = []
-    async with smoke.mock_finam_client(_handler(requests=requests)) as client:
+    gazp = _ok_payload("GAZP")
+    gazp["bars"].insert(0, _bar("2024-01-08"))
+    async with smoke.mock_finam_client(_handler(requests=requests, payloads={"GAZP": gazp})) as client:
         adapter = FinamAdapter(SECRET, client=client)
         report = await smoke.run_acceptance_chain(
             adapter=adapter,
@@ -150,6 +152,10 @@ async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, t
     assert report["failure_reason"] is None
     assert all(stage["ok"] for stage in report["stages"])
     assert report["ticker_counts"] == {"GAZP": 2, "GMKN": 2}
+    first = next(stage["detail"] for stage in report["stages"] if stage["name"] == "first_collect_ready")
+    assert first["counters"]["received"] == 4
+    assert first["per_symbol"]["GAZP"]["ignored_boundary_rows"] == 1
+    assert report["repeat_collect"]["per_symbol"]["GAZP"]["ignored_boundary_rows"] == 1
     assert report["repeat_collect"]["counters"]["inserted"] == 0
     assert report["repeat_collect"]["counters"]["updated"] == 0
     assert report["repeat_collect"]["counters"]["duplicates"] == 4

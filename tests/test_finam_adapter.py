@@ -72,6 +72,33 @@ async def test_contract_decimal_and_moscow_date_with_exclusive_end():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_window", [False, True])
+async def test_previous_moscow_day_is_ignored_once_without_expanding_the_window(include_window):
+    previous_day = "2026-11-15T05:00:00Z"
+    rows = [bar(previous_day, is_data_snapshot=False)]
+    rejected = []
+    if include_window:
+        rejected = [previous_day, "2026-11-14T05:00:00Z", "2026-11-20T21:00:00Z"]
+        rows = [bar(f"2026-11-{day}T05:00:00Z") for day in range(16, 21)] + rows
+        rows.extend(bar(stamp) for stamp in rejected)
+
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"token": JWT})
+        return httpx.Response(200, json={"symbol": "GAZP@MISX", "bars": rows})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await FinamAdapter(SECRET, client=client).fetch_daily(
+            "GAZP", date(2026, 11, 16), date(2026, 11, 21), AdjustmentMode.RAW,
+        )
+    expected_dates = [date(2026, 11, day) for day in range(16, 21)] if include_window else []
+    assert result.status is (FetchStatus.OK if include_window else FetchStatus.EMPTY)
+    assert [quote.quote_time.date() for quote in result.bars] == expected_dates
+    assert result.ignored_boundary_rows == 1
+    assert [failure.payload["timestamp"] for failure in result.parse_failures] == rejected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status,exception,code", [
     (401, PermanentIOError, "FINAM_AUTHORIZATION_FAILED"),
     (403, PermanentIOError, "FINAM_AUTHORIZATION_FAILED"),

@@ -74,6 +74,7 @@ class FinamAdapter(MarketDataAdapter):
         bars: list[QuoteBar] = []
         failures: list[QuarantineRow] = []
         seen: set[date] = set()
+        ignored_boundary_rows = 0
         cursor = start
         for _ in range(MAX_CHUNKS):
             if cursor >= end:
@@ -92,24 +93,33 @@ class FinamAdapter(MarketDataAdapter):
                 raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam bars response has an invalid schema")
             if payload.get("symbol") != f"{symbol}@{RU_EXCHANGE}":
                 raise PermanentIOError("FINAM_SYMBOL_MISMATCH", "Finam returned a different instrument")
-            if len(payload["bars"]) > CHUNK_DAYS:
+            rows = payload["bars"]
+            if len(rows) > CHUNK_DAYS + 1:
                 raise PermanentIOError("FINAM_TOO_MANY_BARS", "Daily response exceeds requested chunk bounds")
-            for row in payload["bars"]:
+            ignored_in_chunk = 0
+            for row in rows:
                 quote_time = None
                 try:
                     if not isinstance(row, dict):
                         raise ValueError("invalid row")
                     source_time = _timestamp(row.get("timestamp"))
                     session_day = source_time.astimezone(_MOSCOW).date()
-                    if not cursor <= session_day < chunk_end:
+                    # Finam can include one candle from the day before the requested start.
+                    preceding_day = (cursor - session_day).days == 1
+                    boundary_row = preceding_day and ignored_in_chunk == 0
+                    if not (cursor <= session_day < chunk_end or boundary_row):
                         raise ValueError("outside requested chunk")
-                    if session_day in seen:
+                    if not boundary_row and session_day in seen:
                         raise ValueError("duplicate daily source row")
-                    quote_time = russian_quote_time(session_day)
+                    if not boundary_row:
+                        quote_time = russian_quote_time(session_day)
                     prices = [_decimal(row.get(name)) for name in ("open", "high", "low", "close")]
                     volume = _decimal(row.get("volume"))
                     if volume < 0 or volume != volume.to_integral_value():
                         raise ValueError("invalid share volume")
+                    if boundary_row:
+                        ignored_in_chunk = 1
+                        continue
                     bars.append(QuoteBar(
                         provider=self.provider_name, symbol=symbol, exchange=RU_EXCHANGE,
                         interval="1d", quote_time=quote_time,
@@ -126,12 +136,18 @@ class FinamAdapter(MarketDataAdapter):
                         reason_detail="Invalid, duplicate, or out-of-window Finam daily bar",
                         payload=_safe_payload(row, self._api_token, jwt),
                     ))
+            if len(rows) - ignored_in_chunk > CHUNK_DAYS:
+                raise PermanentIOError("FINAM_TOO_MANY_BARS", "Daily response exceeds requested chunk bounds")
+            ignored_boundary_rows += ignored_in_chunk
             cursor = chunk_end
         if cursor < end:
             raise PermanentIOError("FINAM_CHUNK_LIMIT", "Finam request exceeded the bounded chunk limit")
         bars.sort(key=lambda bar: bar.quote_time)
         status = FetchStatus.OK if bars or failures else FetchStatus.EMPTY
-        return FetchResult(status=status, symbol=symbol, bars=bars, parse_failures=failures)
+        return FetchResult(
+            status=status, symbol=symbol, bars=bars, parse_failures=failures,
+            ignored_boundary_rows=ignored_boundary_rows,
+        )
 
     async def _request(self, client, method, path, **kwargs):
         try:

@@ -134,6 +134,7 @@ class FetchResult:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     symbol: Optional[str] = None
+    ignored_boundary_rows: int = 0
 
 
 @dataclass

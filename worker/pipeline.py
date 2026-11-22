@@ -159,6 +159,8 @@ class MarketDataPipeline:
                 "parse_failures": len(fetch.parse_failures),
                 "error_code": fetch.error_code,
             }
+            if fetch.ignored_boundary_rows:
+                per_symbol[symbol]["ignored_boundary_rows"] = fetch.ignored_boundary_rows
 
             if fetch.status is FetchStatus.UNAVAILABLE:
                 errors.append(
