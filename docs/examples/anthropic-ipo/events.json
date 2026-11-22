@@ -1,0 +1,42 @@
+{
+  "symbol": "xyz:ANT",
+  "cases": [
+    {
+      "id": "anthropic-ipo-first-print",
+      "event": "Первая сделка акциями Anthropic на Nasdaq",
+      "watch_from": "2026-11-19T16:48:24Z",
+      "sources": [
+        "https://www.anthropic.com/news/anthropic-prices-initial-public-offering",
+        "https://perpex.co/markets/hip-3/xyz/anthropic"
+      ],
+      "public_context": [
+        {
+          "available_by": "2026-11-19T00:00:00-05:00",
+          "fact": "Anthropic объявила цену IPO 83 USD 18 ноября. Точная минута публикации не задана.",
+          "source": "https://www.anthropic.com/news/anthropic-prices-initial-public-offering"
+        },
+        {
+          "available_by": "2026-11-19T16:48:24Z",
+          "fact": "Первая публичная сделка ANT на Nasdaq прошла по 111,50 USD, на 34,3% выше цены IPO.",
+          "source": "https://perpex.co/markets/hip-3/xyz/anthropic"
+        }
+      ]
+    },
+    {
+      "id": "anthropic-second-session",
+      "event": "Начало второй основной сессии Nasdaq после ночного снижения фьючерса",
+      "watch_from": "2026-11-20T14:30:00Z",
+      "sources": [
+        "https://listingcenter.nasdaq.com/assets/RuleBook/Nasdaq/rules/Nasdaq%20Equity%201.html",
+        "https://www.coindesk.com/markets/2026/11/20/crypto-traders-have-anthropic-trading-below-its-first-nasdaq-close-on-hyperliquid"
+      ],
+      "public_context": [
+        {
+          "available_by": "2026-11-20T06:15:00Z",
+          "fact": "Утром CoinDesk описал фьючерс ANT в районе 90–93 USD, примерно на 5% ниже предыдущего закрытия акции по 97,17 USD. Для отсечки использовано время обновления статьи.",
+          "source": "https://www.coindesk.com/markets/2026/11/20/crypto-traders-have-anthropic-trading-below-its-first-nasdaq-close-on-hyperliquid"
+        }
+      ]
+    }
+  ]
+}

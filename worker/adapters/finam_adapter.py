@@ -1,4 +1,4 @@
-"""Read-only Finam REST daily bars; the only POST exchanges a secret for JWT.
+"""Read-only Finam REST bars; the only POST exchanges a secret for JWT.
 
 No account, order or trading methods are exposed. The source timestamp is
 converted to its Moscow calendar date and kept in quarantine payloads. The
@@ -7,7 +7,7 @@ stored 23:59:59 label identifies that day; it is not the exchange close.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import math
 from typing import Any
@@ -65,11 +65,7 @@ class FinamAdapter(MarketDataAdapter):
             return await self._fetch(client, sym, start, end)
 
     async def _fetch(self, client, symbol: str, start: date, end: date) -> FetchResult:
-        # A fresh session per fetch avoids assuming a hard-coded JWT lifetime.
-        auth = await self._request(client, "POST", "/v1/sessions", json={"secret": self._api_token})
-        jwt = auth.get("token") if isinstance(auth, dict) else None
-        if not isinstance(jwt, str) or not jwt or not jwt.isascii() or any(c.isspace() for c in jwt):
-            raise PermanentIOError("FINAM_INVALID_AUTH_RESPONSE", "Finam returned no usable session token")
+        jwt = await self._open_session(client)
 
         bars: list[QuoteBar] = []
         failures: list[QuarantineRow] = []
@@ -80,20 +76,9 @@ class FinamAdapter(MarketDataAdapter):
             if cursor >= end:
                 break
             chunk_end = cursor + timedelta(days=min(CHUNK_DAYS, (end - cursor).days))
-            payload = await self._request(
-                client, "GET", f"/v1/instruments/{symbol}@{RU_EXCHANGE}/bars",
-                headers={"Authorization": f"Bearer {jwt}"},
-                params={
-                    "timeframe": "TIME_FRAME_D",
-                    "interval.start_time": _midnight(cursor),
-                    "interval.end_time": _midnight(chunk_end),
-                },
+            rows = await self._read_bars(
+                client, symbol, jwt, "TIME_FRAME_D", _midnight(cursor), _midnight(chunk_end)
             )
-            if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
-                raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam bars response has an invalid schema")
-            if payload.get("symbol") != f"{symbol}@{RU_EXCHANGE}":
-                raise PermanentIOError("FINAM_SYMBOL_MISMATCH", "Finam returned a different instrument")
-            rows = payload["bars"]
             if len(rows) > CHUNK_DAYS + 1:
                 raise PermanentIOError("FINAM_TOO_MANY_BARS", "Daily response exceeds requested chunk bounds")
             ignored_in_chunk = 0
@@ -148,6 +133,75 @@ class FinamAdapter(MarketDataAdapter):
             status=status, symbol=symbol, bars=bars, parse_failures=failures,
             ignored_boundary_rows=ignored_boundary_rows,
         )
+
+    async def fetch_minutes(self, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
+        """Read one closed, minute-aligned window without writing to storage."""
+        if not self._api_token or not self._api_token.strip():
+            raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
+        try:
+            symbol = require_ru_symbol(symbol)
+        except ValueError:
+            raise PermanentIOError("UNSUPPORTED_INSTRUMENT", "Finam research symbols are GAZP, GMKN") from None
+        if any(stamp.utcoffset() is None or stamp.second or stamp.microsecond for stamp in (start, end)):
+            raise PermanentIOError("INVALID_WINDOW", "M1 requires timezone-aware minute boundaries")
+        start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        if not start < end <= datetime.now(timezone.utc) or end - start > timedelta(days=1):
+            raise PermanentIOError("INVALID_WINDOW", "M1 requires a closed window of at most one day")
+
+        if self._client is not None:
+            return await self._fetch_minutes(self._client, symbol, start, end)
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            return await self._fetch_minutes(client, symbol, start, end)
+
+    async def _fetch_minutes(self, client, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
+        jwt = await self._open_session(client)
+        rows = await self._read_bars(client, symbol, jwt, "TIME_FRAME_M1", start.isoformat(), end.isoformat())
+        received: dict[datetime, QuoteBar] = {}
+        try:
+            for row in rows:
+                stamp = _timestamp(row["timestamp"]).astimezone(timezone.utc)
+                if stamp.second or stamp.microsecond or not start <= stamp < end or stamp in received:
+                    raise ValueError("unexpected M1 timestamp")
+                open_, high, low, close, volume = map(
+                    _decimal, (row[key] for key in ("open", "high", "low", "close", "volume"))
+                )
+                if not (
+                    0 < low <= min(open_, close) <= max(open_, close) <= high
+                    and volume >= 0 and volume == volume.to_integral_value()
+                ):
+                    raise ValueError("invalid M1 price or volume")
+                received[stamp] = QuoteBar(
+                    provider=self.provider_name, symbol=symbol, exchange=RU_EXCHANGE,
+                    interval="1m", quote_time=stamp, open=open_, high=high, low=low,
+                    close=close, volume=int(volume), adjustment_mode=AdjustmentMode.RAW,
+                    session_timezone=RU_SESSION_TIMEZONE, currency=RU_CURRENCY,
+                )
+        except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
+            raise PermanentIOError(
+                "FINAM_INVALID_M1_BAR", "Finam returned an invalid, duplicate or out-of-window minute"
+            ) from None
+        return [received[stamp] for stamp in sorted(received)]
+
+    async def _open_session(self, client) -> str:
+        # A fresh session per fetch avoids assuming a hard-coded JWT lifetime.
+        auth = await self._request(client, "POST", "/v1/sessions", json={"secret": self._api_token})
+        jwt = auth.get("token") if isinstance(auth, dict) else None
+        if not isinstance(jwt, str) or not jwt or not jwt.isascii() or any(c.isspace() for c in jwt):
+            raise PermanentIOError("FINAM_INVALID_AUTH_RESPONSE", "Finam returned no usable session token")
+        return jwt
+
+    async def _read_bars(self, client, symbol: str, jwt: str, timeframe: str, start: str, end: str) -> list:
+        instrument = f"{symbol}@{RU_EXCHANGE}"
+        payload = await self._request(
+            client, "GET", f"/v1/instruments/{instrument}/bars",
+            headers={"Authorization": f"Bearer {jwt}"},
+            params={"timeframe": timeframe, "interval.start_time": start, "interval.end_time": end},
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
+            raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam bars response has an invalid schema")
+        if payload.get("symbol") != instrument:
+            raise PermanentIOError("FINAM_SYMBOL_MISMATCH", "Finam returned a different instrument")
+        return payload["bars"]
 
     async def _request(self, client, method, path, **kwargs):
         try:

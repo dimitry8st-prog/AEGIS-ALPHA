@@ -209,3 +209,37 @@ async def test_network_exception_is_sanitized():
             await FinamAdapter(SECRET, client=client).fetch_daily("GAZP", START, END, AdjustmentMode.RAW)
     assert caught.value.code == "FINAM_NETWORK_ERROR"
     assert SECRET not in str(caught.value) and JWT not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_timestamp", [None, "2026-11-20T07:12:00Z"])
+async def test_m1_uses_utc_and_excludes_the_window_end(bad_timestamp):
+    def handler(request):
+        if request.method == "POST":
+            assert request.url.path == "/v1/sessions"
+            return httpx.Response(200, json={"token": JWT})
+        assert request.url.path == "/v1/instruments/GAZP@MISX/bars"
+        assert dict(request.url.params) == {
+            "timeframe": "TIME_FRAME_M1",
+            "interval.start_time": "2026-11-20T07:10:00+00:00",
+            "interval.end_time": "2026-11-20T07:12:00+00:00",
+        }
+        assert request.headers["authorization"] == f"Bearer {JWT}"
+        rows = [bar("2026-11-20T07:11:00Z"), bar("2026-11-20T10:10:00+03:00")]
+        if bad_timestamp:
+            rows.append(bar(bad_timestamp))
+        return httpx.Response(200, json={"symbol": "GAZP@MISX", "bars": rows})
+
+    start = datetime.fromisoformat("2026-11-20T10:10:00+03:00")
+    end = datetime.fromisoformat("2026-11-20T10:12:00+03:00")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = FinamAdapter(SECRET, client=client)
+        if bad_timestamp:
+            with pytest.raises(PermanentIOError, match="out-of-window minute"):
+                await adapter.fetch_minutes("GAZP", start, end)
+        else:
+            bars = await adapter.fetch_minutes("GAZP", start, end)
+            assert [row.quote_time.isoformat() for row in bars] == [
+                "2026-11-20T07:10:00+00:00", "2026-11-20T07:11:00+00:00",
+            ]
+            assert all(row.interval == "1m" and row.currency == "RUB" for row in bars)

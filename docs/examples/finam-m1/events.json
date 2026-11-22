@@ -1,0 +1,12 @@
+{
+  "provider": "finam",
+  "symbol": "GAZP",
+  "cases": [
+    {
+      "id": "gazp-m1-recent-session",
+      "event": "Контрольное окно в основной сессии Мосбиржи",
+      "watch_from": "2026-11-20T10:10:00+03:00",
+      "sources": ["https://api.finam.ru/docs/rest/"]
+    }
+  ]
+}
