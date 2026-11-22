@@ -99,7 +99,8 @@ function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays) {
     Write-Host "Finam: READY. Window: [$start, $end). Inserted $($report.counters.inserted), duplicates $($report.counters.duplicates)."
 }
 
-if ($CollectOnly -and (-not $CredentialFile -or -not (Test-Path -LiteralPath $CredentialFile -PathType Leaf))) {
+$usesSavedKey = $CollectOnly -and $PSBoundParameters.ContainsKey('CredentialFile')
+if ($usesSavedKey -and (-not $CredentialFile -or -not (Test-Path -LiteralPath $CredentialFile -PathType Leaf))) {
     throw 'The scheduled Finam credential file is missing.'
 }
 
@@ -215,7 +216,7 @@ try {
         $configuredPostgres.POSTGRES_PASSWORD -cne $postgres.POSTGRES_PASSWORD) {
         $dbStatus = Test-Database $configuredPostgres.POSTGRES_PASSWORD
     }
-    if ($dbStatus -eq '28P01' -and -not $CollectOnly) {
+    if ($dbStatus -eq '28P01' -and -not $usesSavedKey) {
         Write-Host 'PostgreSQL rejected the configured login (28P01).'
         $dbSecure = Read-Host 'Existing AEGIS PostgreSQL password (hidden input)' -AsSecureString
         try {
@@ -240,7 +241,11 @@ try {
     }
     Write-Host "PostgreSQL: READY on 127.0.0.1:$dbPort"
     if ($CollectOnly) {
-        $secure = (Get-Content -LiteralPath $CredentialFile -Raw).Trim() | ConvertTo-SecureString
+        $secure = if ($usesSavedKey) {
+            (Get-Content -LiteralPath $CredentialFile -Raw).Trim() | ConvertTo-SecureString
+        } else {
+            Read-Host 'Finam API key (hidden input)' -AsSecureString
+        }
         Invoke-FinamCollection -Key $secure -LookbackDays 7
         return
     }
