@@ -32,16 +32,19 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from worker.adapters.base import MarketDataAdapter
 from worker.adapters.finam_adapter import FinamAdapter
 from worker.config import WorkerSettings
 from worker.export import CSV_NAME, MANIFEST_NAME, ExportError, export_quotes
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
-from worker.types import AdjustmentMode, RunReport, RunStatus
+from worker.types import AdjustmentMode, FetchResult, QuoteBar, RunReport, RunStatus
 
 DEFAULT_SYMBOLS = ("GAZP", "GMKN")
 PROVIDER = "finam"
@@ -310,6 +313,22 @@ def verify_export_artifacts(output_dir: Path) -> dict[str, Any]:
     }
 
 
+class _RecordingAdapter(MarketDataAdapter):
+    """Keep the actual source bars for each pass independently of stored rows."""
+
+    def __init__(self, adapter: MarketDataAdapter) -> None:
+        self.adapter = adapter
+        self.provider_name = adapter.provider_name
+        self.bars: dict[str, frozenset[QuoteBar]] = {}
+
+    async def fetch_daily(
+        self, symbol: str, start: date, end: date, adjustment_mode: AdjustmentMode
+    ) -> FetchResult:
+        result = await self.adapter.fetch_daily(symbol, start, end, adjustment_mode)
+        self.bars[symbol] = frozenset(result.bars)
+        return result
+
+
 async def run_acceptance_chain(
     *,
     adapter: FinamAdapter,
@@ -339,7 +358,8 @@ async def run_acceptance_chain(
         RUN_DEADLINE_SECONDS=120,
         FINAM_API_TOKEN=None,
     )
-    pipeline = MarketDataPipeline(adapter, QuoteRepository(engine), worker_settings)
+    recorded = _RecordingAdapter(adapter)
+    pipeline = MarketDataPipeline(recorded, QuoteRepository(engine), worker_settings)
     stages: list[StageResult] = []
     failure_reason: str | None = None
     collect_options = dict(
@@ -418,7 +438,10 @@ async def run_acceptance_chain(
     )
 
     revisions_mid = await count_revisions(engine)
+    first_source_bars = recorded.bars.copy()
+    recorded.bars.clear()
     second = await pipeline.run(**collect_options)
+    source_bars_match = first_source_bars == recorded.bars
     second_summary = _summarize_collect(second)
     quotes_after_second = await count_quotes(engine, symbols=symbols, start=start, end=end)
     revisions_after = await count_revisions(engine)
@@ -432,18 +455,24 @@ async def run_acceptance_chain(
         and second.counters.updated == 0
         and second.counters.duplicates == second.counters.received
         and second.counters.received > 0
+        and source_bars_match
         and _counters_consistent(second)
         and quotes_after_second == quotes_after_first
         and revisions_after == revisions_mid
     )
     if first_ok and not repeat_ok:
-        failure_reason = failure_reason or "REPEAT_COLLECT_NOT_IDEMPOTENT"
+        failure_reason = failure_reason or (
+            "REPEAT_SOURCE_BARS_CHANGED"
+            if second.status is RunStatus.READY and not source_bars_match
+            else "REPEAT_COLLECT_NOT_IDEMPOTENT"
+        )
     stages.append(
         StageResult(
             "repeat_collect_duplicates_only",
             repeat_ok,
             {
                 **second_summary,
+                "source_bars_match": source_bars_match,
                 "quotes_after": quotes_after_second,
                 "revisions_before_repeat": revisions_mid,
                 "revisions_after_repeat": revisions_after,
@@ -657,6 +686,16 @@ def _acceptance_database_url() -> str | None:
     return _env_text(ACCEPTANCE_DATABASE_ENV)
 
 
+def _database_target(database_url: str) -> tuple[str, int, str]:
+    url = make_url(database_url)
+    if url.get_backend_name() != "postgresql" or not url.database:
+        raise ValueError("An explicit PostgreSQL database is required")
+    host = (url.host or "localhost").lower().rstrip(".")
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        host = "localhost"
+    return host, url.port or 5432, url.database
+
+
 def _known_secrets() -> tuple[str, ...]:
     parts: list[str] = []
     token = _token_from_env()
@@ -765,8 +804,30 @@ async def _async_main(argv: list[str] | None) -> tuple[int, dict[str, Any]]:
         }
         return acceptance_exit_code(report), redact(report, _known_secrets())
 
+    working_url = _env_text("DATABASE_URL")
+    try:
+        acceptance_target = _database_target(database_url)
+        working_target = _database_target(working_url) if working_url else None
+    except (ArgumentError, ValueError):
+        report = {
+            **base,
+            "mode": "live",
+            "status": STATUS_NOT_CONFIGURED,
+            "failure_reason": "Invalid PostgreSQL database configuration",
+        }
+        return acceptance_exit_code(report), redact(report, _known_secrets())
+    if acceptance_target == working_target:
+        report = {
+            **base,
+            "mode": "live",
+            "status": STATUS_NOT_CONFIGURED,
+            "failure_reason": "ACCEPTANCE_DATABASE_MATCHES_WORKING_DATABASE",
+        }
+        return acceptance_exit_code(report), redact(report, _known_secrets())
+
     # Init arguments win over the process environment, including DATABASE_URL.
     settings = WorkerSettings(
+        _env_file=None,
         DATABASE_URL=database_url,
         IO_RETRY_WAIT_SECONDS=0.5,
         FINAM_API_TOKEN=None,

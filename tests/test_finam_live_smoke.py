@@ -370,6 +370,43 @@ async def test_repeat_collect_creates_neither_quotes_nor_revisions(
 
 
 @pytest.mark.asyncio
+async def test_repeat_rejects_missing_source_bar(migrated_engine, database_url, tmp_path):
+    await _clean(migrated_engine)
+    handler = _handler()
+    gazp_reads = 0
+
+    def omit_bar_on_repeat(request):
+        nonlocal gazp_reads
+        response = handler(request)
+        if request.url.path.endswith("/GAZP@MISX/bars"):
+            gazp_reads += 1
+            if gazp_reads == 2:
+                payload = response.json()
+                payload["bars"].pop()
+                return httpx.Response(200, json=payload)
+        return response
+
+    output_dir = tmp_path / "incomplete-repeat"
+    async with smoke.mock_finam_client(omit_bar_on_repeat) as client:
+        report = await smoke.run_acceptance_chain(
+            adapter=FinamAdapter(SECRET, client=client),
+            engine=migrated_engine,
+            symbols=["GAZP", "GMKN"],
+            start=START,
+            end=END,
+            output_dir=output_dir,
+            mode="mock",
+            settings=_settings(database_url),
+        )
+
+    assert report["repeat_collect"]["counters"]["duplicates"] == 3
+    assert report["ticker_counts"] == {"GAZP": 2, "GMKN": 2}
+    assert report["failure_reason"] == "REPEAT_SOURCE_BARS_CHANGED"
+    assert smoke.acceptance_exit_code(report) != 0
+    assert not output_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_csv_manifest_mismatch_is_detected(migrated_engine, database_url, tmp_path):
     await _clean(migrated_engine)
     async with smoke.mock_finam_client(_handler()) as client:
@@ -520,6 +557,34 @@ async def test_one_symbol_and_empty_window_exit_nonzero_without_broker(monkeypat
     dumped = json.dumps({"one": one_report, "empty": empty_report})
     assert SECRET not in dumped
     assert "super-secret-db-pass" not in dumped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "working_url",
+    [
+        "postgresql://test:mock-db-password@localhost/working",
+        "postgresql+asyncpg://prod:other-password@127.0.0.1:5432/working",
+    ],
+)
+async def test_live_rejects_working_database_before_opening_resources(
+    working_url, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("FINAM_API_TOKEN", SECRET)
+    monkeypatch.setenv("DATABASE_URL", working_url)
+    monkeypatch.setenv(
+        "FINAM_ACCEPTANCE_DATABASE_URL",
+        "postgresql://test:mock-db-password@localhost/working",
+    )
+    monkeypatch.setattr(smoke, "create_engine", _must_not_build)
+    monkeypatch.setattr(smoke, "FinamAdapter", _must_not_build)
+    code, report = await smoke.async_main(
+        ["--live", "--start", "2024-01-09", "--end", "2024-01-11", "--output-dir", str(tmp_path / "unused")]
+    )
+    assert code != 0
+    assert report["failure_reason"] == "ACCEPTANCE_DATABASE_MATCHES_WORKING_DATABASE"
+    assert "mock-db-password" not in json.dumps(report)
+    assert not (tmp_path / "unused").exists()
 
 
 def test_live_uses_acceptance_url_and_hides_secrets_from_logs(monkeypatch, caplog, capsys):
