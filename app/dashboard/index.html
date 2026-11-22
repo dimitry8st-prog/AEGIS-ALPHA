@@ -39,7 +39,7 @@
       <div class="page-heading">
         <div>
           <h1>Обзор рынка</h1>
-          <p>Дневные котировки Финама и история загрузок</p>
+          <p>Котировки Финама и история загрузок</p>
         </div>
         <button type="button" class="button refresh" id="refresh" hidden><span aria-hidden="true">↻</span> Обновить</button>
       </div>
@@ -79,12 +79,14 @@
                 <button type="button" data-days="7" aria-pressed="false">7 дн.</button>
                 <button type="button" data-days="30" aria-pressed="true">1 мес.</button>
                 <button type="button" data-days="90" aria-pressed="false">3 мес.</button>
+                <button type="button" id="live-mode" aria-pressed="false">Онлайн · M1</button>
               </div>
             </header>
             <div class="quote-number">
               <strong id="close-price">—</strong><span class="price-unit">₽</span>
               <span id="close-change" class="price-change" hidden></span>
             </div>
+            <p id="live-state" class="series-period" role="status" hidden></p>
             <p id="series-period" class="series-period">Сохранённые дневные свечи · МСК</p>
             <div class="chart-shell">
               <div id="plot-heading" class="plot-heading" hidden>
@@ -104,7 +106,7 @@
               <span><i class="legend-swatch up"></i>Рост</span>
               <span><i class="legend-swatch down"></i>Снижение</span>
               <span><i class="legend-swatch volume"></i>Объём</span>
-              <span class="chart-timezone">Даты сессий · МСК</span>
+              <span id="chart-timezone" class="chart-timezone">Даты сессий · МСК</span>
             </div>
           </article>
 
@@ -127,8 +129,8 @@
             </div>
             <div class="source-block">
               <span class="eyebrow">Источник</span>
-              <strong>Финам <span>·</span> Дневные свечи</strong>
-              <p>Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.</p>
+              <strong id="chart-source">Финам · Дневные свечи</strong>
+              <p id="chart-source-note">Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.</p>
             </div>
           </aside>
         </section>

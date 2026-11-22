@@ -2,10 +2,14 @@ const chart = document.querySelector("#chart");
 const context = chart.getContext("2d");
 const dateShort = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" });
 const dateLong = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeZone: "Europe/Moscow" });
+const timeShort = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
+const timeLong = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Moscow" });
 const price = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat("ru-RU");
 
 let rows = [];
+let intraday = false;
+let lastMessage = null;
 let active = -1;
 let hitArea = { left: 0, step: 1 };
 
@@ -59,7 +63,7 @@ function draw() {
     line(labelX, top, labelX, volumeBottom, "#edf1ec");
     context.textAlign = "center";
     context.fillStyle = "#51675d";
-    const text = dateShort.format(new Date(rows[index].quote_time));
+    const text = (intraday ? timeShort : dateShort).format(new Date(rows[index].quote_time));
     const half = context.measureText(text).width * 0.5;
     context.fillText(text, Math.max(left + half, Math.min(right - half, labelX)), height - 10);
   }
@@ -100,7 +104,7 @@ function showBar() {
   if (!row) return;
   const timestamp = document.querySelector("#plot-date");
   timestamp.dateTime = row.quote_time;
-  timestamp.textContent = dateLong.format(new Date(row.quote_time));
+  timestamp.textContent = (intraday ? timeLong : dateLong).format(new Date(row.quote_time));
   for (const field of ["open", "high", "low", "close", "volume"]) {
     const format = field === "volume" ? number : price;
     document.querySelector("#bar-" + field).textContent = format.format(row[field]);
@@ -129,7 +133,10 @@ chart.addEventListener("keydown", event => {
 });
 new ResizeObserver(draw).observe(chart);
 
-export function renderChart(quotes, message) {
+export function renderChart(quotes, message, minuteBars = false) {
+  if (rows === quotes && intraday === minuteBars && lastMessage === message) return;
+  intraday = minuteBars;
+  lastMessage = message;
   rows = quotes;
   active = -1;
   const hasRows = rows.length > 0;

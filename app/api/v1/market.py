@@ -5,22 +5,28 @@ This module does not start a collection.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from contextlib import aclosing
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.dependencies import get_current_active_user
+from app.core.database import AsyncSessionLocal, get_db
+from app.core.dependencies import get_current_active_user, get_current_user, security
 from app.core.error_handler import AppException, NotFoundError
 from app.models.user import User
 from app.schemas.market import FinamMinute, FinamMinutes, IpoReport, QuotePage, QuoteRow, RunDetail, RunPage, RunSummary
 from app.core.config import settings
 from worker.adapters.finam_adapter import FinamAdapter
+from worker.adapters.finam_stream import stream_finam_market
 from worker.io_retry import PermanentIOError, TransientIOError
 from worker.ipo import search_ipos
 from worker.russian_market import provider_timezone
@@ -299,4 +305,45 @@ async def read_finam_minutes(
             quote_time=bar.quote_time, open=str(bar.open), high=str(bar.high),
             low=str(bar.low), close=str(bar.close), volume=bar.volume,
         ) for bar in bars],
+    )
+
+
+async def _authenticate_stream(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
+    # Close the DB session before the potentially long response starts.
+    async with AsyncSessionLocal() as db:
+        await get_current_user(credentials, db)
+
+
+async def _live_events(jwt: str):
+    try:
+        # Periodic reconnection renews the upstream session and validates the AEGIS login.
+        async with asyncio.timeout(300):
+            async with aclosing(stream_finam_market(jwt)) as events:
+                async for event in events:
+                    yield json.dumps(event, separators=(",", ":")) + "\n"
+    except TimeoutError:
+        return
+    except (PermanentIOError, TransientIOError) as exc:
+        yield json.dumps({"type": "error", "code": exc.code}) + "\n"
+
+
+@router.get(
+    "/finam/stream",
+    dependencies=[Depends(_authenticate_stream)],
+    response_class=StreamingResponse,
+    responses={200: {"content": {"application/x-ndjson": {}}}},
+)
+async def live_finam_market():
+    """Stream NDJSON quotes and M1 candle updates for GAZP and GMKN."""
+    token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
+    try:
+        jwt = await FinamAdapter(token).open_market_session()
+    except TransientIOError as exc:
+        raise AppException(code=exc.code, message=str(exc), status_code=503) from exc
+    except PermanentIOError as exc:
+        status = 503 if exc.code == "FINAM_NOT_CONFIGURED" else 502
+        raise AppException(code=exc.code, message=str(exc), status_code=status) from exc
+    return StreamingResponse(
+        _live_events(jwt), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )

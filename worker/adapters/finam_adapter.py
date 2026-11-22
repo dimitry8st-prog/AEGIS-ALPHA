@@ -182,6 +182,15 @@ class FinamAdapter(MarketDataAdapter):
             ) from None
         return [received[stamp] for stamp in sorted(received)]
 
+    async def open_market_session(self) -> str:
+        """Create a session for read-only live market subscriptions."""
+        if not self._api_token or not self._api_token.strip():
+            raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
+        if self._client is not None:
+            return await self._open_session(self._client)
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            return await self._open_session(client)
+
     async def _open_session(self, client) -> str:
         # A fresh session per fetch avoids assuming a hard-coded JWT lifetime.
         auth = await self._request(client, "POST", "/v1/sessions", json={"secret": self._api_token})

@@ -185,6 +185,7 @@ td:nth-child(n+4), th:nth-child(n+4) { text-align: right; }
   .sign-in { grid-template-columns: 1fr; padding: 17px; }
 }
 @media (max-width: 390px) {
+  .segment { flex-wrap: wrap; }
   .instruments { grid-template-columns: 1fr; }
   .series-period { margin-bottom: 9px; }
 }

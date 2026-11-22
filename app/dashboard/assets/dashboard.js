@@ -1,4 +1,5 @@
 import { renderChart } from "./chart.js";
+import { readMarketStream } from "./stream.js";
 
 const byId = id => document.getElementById(id);
 const api = "/api/v1";
@@ -18,6 +19,9 @@ const signed = new Intl.NumberFormat("ru-RU", { style: "percent", maximumFractio
 const moscow = "Europe/Moscow";
 const dayLabel = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", timeZone: moscow });
 const runTime = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: moscow });
+const quoteTime = new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: moscow,
+});
 const calendar = new Intl.DateTimeFormat("sv-SE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: moscow });
 const oneDay = 86_400_000;
 
@@ -31,6 +35,16 @@ let runsTotal = 0;
 let loading = false;
 let loadError = false;
 let registering = false;
+let liveMode = false;
+let liveRequest = null;
+let liveRetry = null;
+let liveLabel = "";
+let liveBars = {};
+let liveQuotes = {};
+const liveErrors = {
+  FINAM_NOT_CONFIGURED: "Запустите AEGIS с ключом Финама «Просмотр».",
+  FINAM_AUTHORIZATION_FAILED: "Финам отклонил доступ к рыночному потоку.",
+};
 
 function updateNote(message) {
   byId("notice").textContent = message;
@@ -116,34 +130,53 @@ function changeText(node, values, showWhenMissing) {
 }
 
 function renderQuotes() {
-  const quotesNow = quotes[selected] || [];
+  const quotesNow = (liveMode ? liveBars : quotes)[selected] || [];
   const first = quotesNow[0];
   const last = quotesNow.at(-1);
   const instrument = instruments[selected];
   byId("instrument-name").textContent = instrument.name;
-  byId("instrument-symbol").textContent = selected + " · MISX · 1D";
+  byId("instrument-symbol").textContent = selected + " · MISX · " + (liveMode ? "M1" : "1D");
   const icon = byId("instrument-icon");
   icon.textContent = instrument.letter;
   icon.className = "instrument-icon " + selected.toLowerCase();
-  byId("close-price").textContent = last ? rub.format(last.close) : "—";
-  changeText(byId("close-change"), quotesNow, false);
-  byId("series-period").textContent = first
-    ? dayLabel.formatRange(new Date(first.quote_time), new Date(last.quote_time))
-    : "Сохранённые дневные свечи · МСК";
+  const tick = liveQuotes[selected];
+  const latestPrice = liveMode ? (tick?.last ?? last?.close) : last?.close;
+  byId("close-price").textContent = latestPrice ? rub.format(latestPrice) : "—";
+  changeText(byId("close-change"), liveMode ? [] : quotesNow, false);
+  const state = byId("live-state");
+  state.hidden = !liveMode;
+  if (state.textContent !== liveLabel) state.textContent = liveLabel;
+  byId("live-mode").setAttribute("aria-pressed", String(liveMode));
+  byId("chart-timezone").textContent = liveMode ? "Время свечей · МСК" : "Даты сессий · МСК";
+  byId("chart-source").textContent = liveMode ? "Финам · Поток M1" : "Финам · Дневные свечи";
+  byId("chart-source-note").textContent = liveMode
+    ? "Цена и время последней полученной котировки. Минутная свеча обновляется до закрытия."
+    : "Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.";
+  byId("series-period").textContent = liveMode
+    ? (tick ? "Котировка · " + quoteTime.format(new Date(tick.quote_time)) + " МСК" : "Минутные свечи · МСК")
+    : (first ? dayLabel.formatRange(new Date(first.quote_time), new Date(last.quote_time))
+      : "Сохранённые дневные свечи · МСК");
   for (const button of byId("instruments").querySelectorAll("button")) {
     const symbol = button.dataset.symbol;
     const series = quotes[symbol] || [];
     button.setAttribute("aria-pressed", String(selected === symbol));
-    byId("price-" + symbol).textContent = series.length ? rub.format(series.at(-1).close) + " ₽" : "—";
-    changeText(byId("change-" + symbol), series, true);
+    const value = liveMode ? (liveQuotes[symbol]?.last ?? liveBars[symbol]?.at(-1)?.close) : series.at(-1)?.close;
+    byId("price-" + symbol).textContent = value ? rub.format(value) + " ₽" : "—";
+    const change = byId("change-" + symbol);
+    if (liveMode) {
+      change.classList.remove("positive", "negative");
+      change.textContent = liveQuotes[symbol] ? quoteTime.format(new Date(liveQuotes[symbol].quote_time)) : "—";
+    } else {
+      changeText(change, series, true);
+    }
   }
-  for (const button of byId("period").querySelectorAll("button")) {
-    button.setAttribute("aria-pressed", String(days === Number(button.dataset.days)));
+  for (const button of byId("period").querySelectorAll("[data-days]")) {
+    button.setAttribute("aria-pressed", String(!liveMode && days === Number(button.dataset.days)));
   }
   let message = "В базе нет свечей за выбранный период.";
   if (loading) message = "Загрузка котировок…";
   if (loadError) message = "Котировки недоступны.";
-  renderChart(quotesNow, message);
+  renderChart(quotesNow, liveMode ? "Пока нет минутных свечей в этом окне." : message, liveMode);
 }
 
 function renderRuns() {
@@ -173,10 +206,14 @@ function renderRuns() {
 function render() {
   renderQuotes();
   renderRuns();
-  byId("refresh").disabled = loading;
+  byId("refresh").disabled = !liveMode && loading;
 }
 
 function signOut(message = "") {
+  stopLive();
+  liveMode = false;
+  liveBars = {};
+  liveQuotes = {};
   request?.abort();
   request = null;
   token = null;
@@ -189,6 +226,82 @@ function signOut(message = "") {
   render();
   updateNote(message);
   byId("login-form").elements.email.focus();
+}
+
+function stopLive() {
+  liveRequest?.abort();
+  liveRequest = null;
+  clearTimeout(liveRetry);
+}
+
+function mergeMinutes(symbol, rows, preferStream = false) {
+  const prior = liveBars[symbol] || [];
+  const combined = preferStream ? [...rows, ...prior] : [...prior, ...rows];
+  const deduplicated = new Map(combined.map(row => [Date.parse(row.quote_time), row]));
+  liveBars[symbol] = [...deduplicated.values()]
+    .sort((a, b) => Date.parse(a.quote_time) - Date.parse(b.quote_time)).slice(-120);
+}
+
+async function refreshMinuteHistory(options) {
+  const end = Math.floor(Date.now() / 60000) * 60000;
+  const start = new Date(end - 120 * 60000).toISOString();
+  await Promise.allSettled(Object.keys(instruments).map(async symbol => {
+    const query = new URLSearchParams({ symbol, start, end: new Date(end).toISOString() });
+    const snapshot = await json(api + "/market/finam/minutes?" + query, options);
+    if (!options.signal.aborted) mergeMinutes(symbol, snapshot.items, true);
+  }));
+  if (!options.signal.aborted) renderQuotes();
+}
+
+async function startLive(retryDelay = 3000) {
+  if (!token) return;
+  stopLive();
+  liveMode = true;
+  const current = new AbortController();
+  liveRequest = current;
+  const options = { signal: current.signal, headers: { Authorization: "Bearer " + token } };
+  liveLabel = "Подключение к Финаму…";
+  render();
+  try {
+    for await (const event of readMarketStream(api + "/market/finam/stream", options)) {
+      if (current.signal.aborted) return;
+      if (event.type === "connected") {
+        liveLabel = "Поток подключён · ждём рыночные данные";
+        void refreshMinuteHistory(options);
+      } else if (event.type === "error") {
+        throw Object.assign(new Error("Finam stream error"), { code: event.code });
+      } else if (event.type === "quote" || event.type === "bar") {
+        retryDelay = 3000;
+        liveLabel = "Поток Финама подключён";
+        if (event.type === "quote") {
+          const previous = liveQuotes[event.symbol];
+          if (!previous || Date.parse(event.quote_time) >= Date.parse(previous.quote_time)) {
+            liveQuotes[event.symbol] = event;
+          }
+        } else {
+          mergeMinutes(event.symbol, [event]);
+        }
+      } else {
+        continue;
+      }
+      renderQuotes();
+    }
+  } catch (error) {
+    if (current.signal.aborted) return;
+    if ([401, 403].includes(error.status)) {
+      signOut("Сессия закончилась. Войдите снова.");
+      return;
+    }
+    if (liveErrors[error.code]) {
+      liveLabel = liveErrors[error.code];
+      renderQuotes();
+      return;
+    }
+  }
+  if (current.signal.aborted) return;
+  liveLabel = "Поток прерван · переподключение…";
+  renderQuotes();
+  liveRetry = setTimeout(() => startLive(Math.min(retryDelay * 2, 30000)), retryDelay);
 }
 
 const loginForm = byId("login-form");
@@ -259,17 +372,20 @@ byId("login-form").addEventListener("submit", async event => {
 });
 
 byId("logout").addEventListener("click", () => signOut());
-byId("refresh").addEventListener("click", load);
+byId("refresh").addEventListener("click", () => liveMode ? startLive() : load());
+byId("live-mode").addEventListener("click", () => startLive());
 for (const button of byId("instruments").querySelectorAll("button")) {
   button.addEventListener("click", () => {
     selected = button.dataset.symbol;
     renderQuotes();
   });
 }
-for (const button of byId("period").querySelectorAll("button")) {
+for (const button of byId("period").querySelectorAll("[data-days]")) {
   button.addEventListener("click", () => {
     const next = Number(button.dataset.days);
-    if (days === next) return;
+    if (days === next && !liveMode) return;
+    stopLive();
+    liveMode = false;
     days = next;
     load();
   });
