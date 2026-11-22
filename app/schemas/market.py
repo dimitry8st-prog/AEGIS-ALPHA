@@ -1,7 +1,7 @@
 """Read-only response models for collection runs and stored quotes."""
 
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -67,3 +67,53 @@ class QuotePage(BaseModel):
         description="Provider's local session-date timezone: New York for US, Moscow for moex/finam. End exclusive.",
     )
     items: list[QuoteRow]
+
+
+class FinamMinute(BaseModel):
+    quote_time: datetime
+    open: str
+    high: str
+    low: str
+    close: str
+    volume: int
+
+
+class FinamMinutes(BaseModel):
+    provider: Literal["finam"] = "finam"
+    interval: Literal["1m"] = "1m"
+    currency: Literal["RUB"] = "RUB"
+    symbol: str
+    start: datetime
+    end: datetime
+    status: Literal["READY", "PARTIAL", "EMPTY"]
+    expected_minutes: int
+    items: list[FinamMinute]
+
+
+class IpoEntry(BaseModel):
+    id: str
+    company: str
+    symbol: str | None
+    exchange: str | None
+    status: str
+    date: date | None
+    date_kind: str
+    offer_price: str | None
+    price_kind: str
+    currency: str
+    source_url: str
+
+
+class IpoSource(BaseModel):
+    market: Literal["moex", "us"]
+    url: str
+    scope: str
+    status: Literal["ok", "unavailable"]
+    error: str | None = None
+    entries: list[IpoEntry]
+
+
+class IpoReport(BaseModel):
+    observed_at: datetime
+    status: Literal["ok", "partial", "unavailable"]
+    sources: list[IpoSource]

@@ -10,6 +10,8 @@ param(
 
     [switch] $DailyCollect,
 
+    [switch] $EnableFinamApi,
+
     [string] $CredentialFile
 )
 
@@ -109,6 +111,9 @@ if ($DailyCollect -and ($CollectOnly -or $PSBoundParameters.ContainsKey('Credent
     throw 'Use DailyCollect on its own. The daily process asks for the Finam key.'
 }
 $collectionOnly = $CollectOnly -or $DailyCollect
+if ($EnableFinamApi -and $collectionOnly) {
+    throw 'EnableFinamApi starts the dashboard. Use it without collection-only switches.'
+}
 $usesSavedKey = $CollectOnly -and $PSBoundParameters.ContainsKey('CredentialFile')
 if ($usesSavedKey -and (-not $CredentialFile -or -not (Test-Path -LiteralPath $CredentialFile -PathType Leaf))) {
     throw 'The scheduled Finam credential file is missing.'
@@ -126,7 +131,8 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 
 $shortRevision = $Revision.Substring(0, 12)
 $checkout = Join-Path (Split-Path $repo -Parent) "AEGIS-dashboard-$shortRevision"
-$instance = "aegis-dashboard-$shortRevision"
+$apiMode = if ($EnableFinamApi) { '-finam-api' } else { '' }
+$instance = "aegis-dashboard-$shortRevision$apiMode"
 
 Get-Command -Name git, docker -ErrorAction Stop | Out-Null
 Invoke-Checked docker @('info', '--format', '{{.ServerVersion}}')
@@ -173,7 +179,7 @@ if (-not $collectionOnly) {
 $dbUser = [uri]::EscapeDataString($postgres.POSTGRES_USER)
 $dbName = [uri]::EscapeDataString($postgres.POSTGRES_DB)
 
-$runtime = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "AEGIS/dashboard/$shortRevision"
+$runtime = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "AEGIS/dashboard/$shortRevision$apiMode"
 $null = New-Item -ItemType Directory -Path $runtime -Force
 $compat = Join-Path $runtime 'bcrypt'
 $state = Join-Path $runtime 'port'
@@ -282,9 +288,22 @@ try {
         }
     }
     if (-not $baseUrl) {
-        $server = Start-Process -FilePath $python -ArgumentList @(
-            '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '0'
-        ) -WorkingDirectory $checkout -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -WindowStyle Hidden -PassThru
+        if ($EnableFinamApi) {
+            $secure = Read-Host 'Finam read-only API key (hidden input)' -AsSecureString
+            if ($secure.Length -eq 0) { throw 'No Finam API key was supplied.' }
+            [Environment]::SetEnvironmentVariable(
+                'FINAM_API_TOKEN', ([pscredential]::new('finam', $secure)).GetNetworkCredential().Password, 'Process'
+            )
+        }
+        try {
+            $server = Start-Process -FilePath $python -ArgumentList @(
+                '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '0'
+            ) -WorkingDirectory $checkout -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -WindowStyle Hidden -PassThru
+        } finally {
+            if ($EnableFinamApi) {
+                [Environment]::SetEnvironmentVariable('FINAM_API_TOKEN', $null, 'Process')
+            }
+        }
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             $server.Refresh()
             if ($server.HasExited) { break }
@@ -309,6 +328,10 @@ try {
     }
     $dashboardUrl = "$baseUrl/dashboard"
     Write-Host "Dashboard: $dashboardUrl"
+    if ($EnableFinamApi) {
+        Write-Host "AEGIS API: $baseUrl/docs"
+        return
+    }
     $secure = Read-Host 'Finam API key (hidden input)' -AsSecureString
     Invoke-FinamCollection -Key $secure -LookbackDays 30
 } finally {

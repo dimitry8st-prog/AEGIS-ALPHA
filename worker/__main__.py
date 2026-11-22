@@ -9,7 +9,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from worker.adapters.offline import OfflineAdapter
@@ -19,6 +19,7 @@ from worker.adapters.finam_adapter import FinamAdapter
 from worker.config import WorkerSettings
 from worker.export import ExportError, export_quotes
 from worker.finam_schedule import run_finam_schedule
+from worker.ipo import search_ipos
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
 from worker.types import AdjustmentMode
@@ -28,6 +29,16 @@ from worker.portfolio import research_portfolio
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def _parse_month(value: str) -> str:
+    try:
+        normalized = datetime.strptime(value, "%Y-%m").strftime("%Y-%m")
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected YYYY-MM") from None
+    if value != normalized:
+        raise argparse.ArgumentTypeError("expected YYYY-MM")
+    return normalized
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("portfolio", help="Show the GAZP/GMKN research watchlist (no brokerage positions)")
     sub.add_parser("finam-daily", help="Collect Finam daily candles at 08:30 Moscow time until stopped")
+    ipo = sub.add_parser("ipo", help="Find companies in the MOEX and US IPO calendars")
+    ipo.add_argument("--market", choices=("all", "moex", "us"), default="all")
+    ipo.add_argument("--month", type=_parse_month, help="US calendar month YYYY-MM")
+    ipo.add_argument("--query", help="Company name or ticker")
     return p
 
 
@@ -153,6 +168,12 @@ async def _run_finam_daily() -> int:
     return 0
 
 
+async def _run_ipo(args: argparse.Namespace) -> int:
+    report = await search_ipos(args.market, args.month, args.query)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["status"] == "ok" else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -163,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "portfolio":
         print(json.dumps(research_portfolio(), ensure_ascii=False, indent=2))
         return 0
+    if args.command == "ipo":
+        return asyncio.run(_run_ipo(args))
     if args.command == "finam-daily":
         try:
             return asyncio.run(_run_finam_daily())

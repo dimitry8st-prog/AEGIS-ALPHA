@@ -1,11 +1,12 @@
-"""Read-only access to collection reports and stored quotes.
+"""Read-only access to collection reports, quotes, Finam minutes and IPO calendars.
 
 This module does not start a collection.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -17,8 +18,11 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_active_user
 from app.core.error_handler import AppException, NotFoundError
 from app.models.user import User
-from app.schemas.market import QuotePage, QuoteRow, RunDetail, RunPage, RunSummary
+from app.schemas.market import FinamMinute, FinamMinutes, IpoReport, QuotePage, QuoteRow, RunDetail, RunPage, RunSummary
 from app.core.config import settings
+from worker.adapters.finam_adapter import FinamAdapter
+from worker.io_retry import PermanentIOError, TransientIOError
+from worker.ipo import search_ipos
 from worker.russian_market import provider_timezone
 from worker.portfolio import research_portfolio
 
@@ -249,3 +253,50 @@ async def russian_research_portfolio(
         "required_environment_variable": "FINAM_API_TOKEN",
     }
     return portfolio
+
+
+@router.get("/ipos", response_model=IpoReport)
+async def list_ipos(
+    market: Literal["all", "moex", "us"] = "all",
+    month: str | None = Query(None, pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$"),
+    query: str | None = Query(None, max_length=120),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Find IPO companies and return separate source statuses and date types."""
+    del current_user
+    if month is not None and month.startswith("0000-"):
+        raise AppException(code="INVALID_MONTH", message="month must use a positive year", status_code=422)
+    return await search_ipos(market, month, query)
+
+
+@router.get("/finam/minutes", response_model=FinamMinutes)
+async def read_finam_minutes(
+    symbol: Literal["GAZP", "GMKN"],
+    start: datetime,
+    end: datetime,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Read a closed M1 window directly from Finam, with an exclusive end."""
+    del current_user
+    token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
+    try:
+        bars = await FinamAdapter(token).fetch_minutes(symbol, start, end)
+    except TransientIOError as exc:
+        raise AppException(code=exc.code, message=str(exc), status_code=503) from exc
+    except PermanentIOError as exc:
+        status = {"INVALID_WINDOW": 422, "FINAM_NOT_CONFIGURED": 503}.get(exc.code, 502)
+        raise AppException(code=exc.code, message=str(exc), status_code=status) from exc
+
+    start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    expected = (end - start) // timedelta(minutes=1)
+    return FinamMinutes(
+        symbol=symbol,
+        start=start,
+        end=end,
+        expected_minutes=expected,
+        status="READY" if len(bars) == expected else ("PARTIAL" if bars else "EMPTY"),
+        items=[FinamMinute(
+            quote_time=bar.quote_time, open=str(bar.open), high=str(bar.high),
+            low=str(bar.low), close=str(bar.close), volume=bar.volume,
+        ) for bar in bars],
+    )

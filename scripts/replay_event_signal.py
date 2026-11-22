@@ -130,6 +130,7 @@ def replay(symbol: str, case: dict, rows: list[dict]) -> dict:
         "public_context": context,
         "observation_start": iso_utc(start),
         "expires_at": iso_utc(end),
+        "candles_checked": len(bars),
         "range_high": str(ceiling),
         "range_low": str(floor),
         "candidate": None,
@@ -157,6 +158,7 @@ def replay(symbol: str, case: dict, rows: list[dict]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--events", type=Path, default=EXAMPLE_DIR / "events.json")
+    parser.add_argument("--symbol", help="Override the instrument in the event file")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--candles", type=Path, help="Local M1 snapshot JSON array")
     source.add_argument("--live", action="store_true", help="Read the historical windows from the configured provider")
@@ -166,7 +168,7 @@ def main() -> int:
         parser.error("--save-candles requires --live")
     try:
         specification = json.loads(args.events.read_text(encoding="utf-8"))
-        symbol, cases = specification["symbol"], specification["cases"]
+        symbol, cases = args.symbol or specification["symbol"], specification["cases"]
         if not isinstance(symbol, str) or not symbol or not isinstance(cases, list) or not cases:
             raise ValueError("an instrument and at least one event are required")
         provider = specification.get("provider", "hyperliquid")
