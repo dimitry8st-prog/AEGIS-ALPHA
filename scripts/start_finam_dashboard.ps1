@@ -4,7 +4,11 @@ param(
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string] $Revision
+    [string] $Revision,
+
+    [switch] $CollectOnly,
+
+    [string] $CredentialFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,8 +34,11 @@ function Start-DashboardRelay {
     if (-not $network) { throw 'The AEGIS Docker network was not found.' }
     $relay = "aegis-dashboard-relay-$shortRevision"
     $label = "aegis.dashboard.relay=$Revision"
+    $running = Invoke-Checked docker @('ps', '--filter', "network=$network", '--filter', 'label=aegis.dashboard.relay', '--format', '{{.Names}}')
     $existing = Invoke-Checked docker @('ps', '-a', '--filter', "name=^/$relay$", '--filter', "label=$label", '--format', '{{.Names}}')
-    if ($existing -eq $relay) {
+    if ($running) {
+        $relay = $running | Select-Object -First 1
+    } elseif ($existing -eq $relay) {
         Invoke-Checked docker @('start', $relay) | Out-Host
     } else {
         $config = Join-Path $checkout 'docker/dashboard/haproxy.cfg'
@@ -69,6 +76,33 @@ function Test-Database([string] $Password) {
     return Invoke-Checked $python @('scripts/check_dashboard_dependencies.py')
 }
 
+function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays) {
+    $ErrorActionPreference = 'Continue'
+    $endDay = [DateTime]::UtcNow.AddHours(3).Date
+    $start = $endDay.AddDays(-$LookbackDays).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    $end = $endDay.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    if ($Key.Length -eq 0) { throw 'No Finam API key was supplied.' }
+    [Environment]::SetEnvironmentVariable(
+        'FINAM_API_TOKEN', ([pscredential]::new('finam', $Key)).GetNetworkCredential().Password, 'Process'
+    )
+    try {
+        $reportJson = & $python -m worker collect --provider finam --symbols 'GAZP,GMKN' --adjustment raw --start $start --end $end
+        $collectExit = $LASTEXITCODE
+    } finally {
+        [Environment]::SetEnvironmentVariable('FINAM_API_TOKEN', $null, 'Process')
+    }
+    $report = ($reportJson -join "`n") | ConvertFrom-Json -ErrorAction Stop
+    if ($collectExit -ne 0 -or $report.status -ne 'READY') {
+        Write-Host ($reportJson -join "`n")
+        throw "Finam collection returned $($report.status)."
+    }
+    Write-Host "Finam: READY. Window: [$start, $end). Inserted $($report.counters.inserted), duplicates $($report.counters.duplicates)."
+}
+
+if ($CollectOnly -and (-not $CredentialFile -or -not (Test-Path -LiteralPath $CredentialFile -PathType Leaf))) {
+    throw 'The scheduled Finam credential file is missing.'
+}
+
 $repo = (Resolve-Path -LiteralPath $Repository).Path
 $composeFile = Join-Path $repo 'docker-compose.yml'
 $python = Join-Path $repo '.venv/Scripts/python.exe'
@@ -99,7 +133,9 @@ $envFile = Join-Path $repo '.env'
 if (Test-Path -LiteralPath $envFile -PathType Leaf) {
     $compose += @('--env-file', $envFile)
 }
-Invoke-Checked docker ($compose + @('up', '-d', '--no-recreate', '--wait', '--wait-timeout', '90', 'postgres', 'redis'))
+$services = @('postgres')
+if (-not $CollectOnly) { $services += 'redis' }
+Invoke-Checked docker ($compose + @('up', '-d', '--no-recreate', '--wait', '--wait-timeout', '90') + $services)
 $composeConfig = ((Invoke-Checked docker ($compose + @('config', '--format', 'json'))) -join "`n") | ConvertFrom-Json
 $configuredPostgres = $composeConfig.services.postgres.environment
 $app = $composeConfig.services.app.environment
@@ -118,7 +154,11 @@ if (-not $postgres.POSTGRES_USER -or -not $postgres.POSTGRES_DB) {
     throw 'The running PostgreSQL container has no configured user or database.'
 }
 $dbPort = Get-PublishedPort ($compose + @('port', 'postgres', '5432'))
-$redisPort = Get-PublishedPort ($compose + @('port', 'redis', '6379'))
+$redisUrl = $null
+if (-not $CollectOnly) {
+    $redisPort = Get-PublishedPort ($compose + @('port', 'redis', '6379'))
+    $redisUrl = "redis://127.0.0.1:$redisPort/0"
+}
 $dbUser = [uri]::EscapeDataString($postgres.POSTGRES_USER)
 $dbName = [uri]::EscapeDataString($postgres.POSTGRES_DB)
 
@@ -131,7 +171,7 @@ $stderrLog = Join-Path $runtime 'api.err.log'
 
 $environment = @{
     DATABASE_URL = $null
-    REDIS_URL = "redis://127.0.0.1:$redisPort/0"
+    REDIS_URL = $redisUrl
     JWT_SECRET_KEY = $app.JWT_SECRET_KEY
     JWT_ALGORITHM = $app.JWT_ALGORITHM
     JWT_EXPIRATION_HOURS = $app.JWT_EXPIRATION_HOURS
@@ -151,18 +191,22 @@ try {
         [Environment]::SetEnvironmentVariable($name, $environment[$name], 'Process')
     }
     $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
-    $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
+    $redisStatus = if ($CollectOnly) { 'SKIPPED' } else { Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis') }
     $connectionFailures = @('08000', '08001', '08003', '08006', '08P01', 'TIMEOUT', 'UNREACHABLE')
-    if ($dbStatus -in $connectionFailures -or $redisStatus -ne 'READY') {
+    if ($dbStatus -in $connectionFailures -or $redisStatus -eq 'UNREACHABLE') {
         Write-Host "Direct ports: PostgreSQL $dbStatus, Redis $redisStatus. Opening new loopback ports."
         $ports = Start-DashboardRelay
         $dbPort = $ports.Postgres
-        $redisPort = $ports.Redis
-        [Environment]::SetEnvironmentVariable('REDIS_URL', "redis://127.0.0.1:$redisPort/0", 'Process')
+        if (-not $CollectOnly) {
+            $redisPort = $ports.Redis
+            [Environment]::SetEnvironmentVariable('REDIS_URL', "redis://127.0.0.1:$redisPort/0", 'Process')
+        }
         for ($attempt = 0; $attempt -lt 5; $attempt++) {
             $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
-            $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
-            if ($dbStatus -notin $connectionFailures -and $redisStatus -eq 'READY') { break }
+            if (-not $CollectOnly) {
+                $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
+            }
+            if ($dbStatus -notin $connectionFailures -and $redisStatus -in @('READY', 'SKIPPED')) { break }
             Start-Sleep -Seconds 1
         }
     }
@@ -171,7 +215,7 @@ try {
         $configuredPostgres.POSTGRES_PASSWORD -cne $postgres.POSTGRES_PASSWORD) {
         $dbStatus = Test-Database $configuredPostgres.POSTGRES_PASSWORD
     }
-    if ($dbStatus -eq '28P01') {
+    if ($dbStatus -eq '28P01' -and -not $CollectOnly) {
         Write-Host 'PostgreSQL rejected the configured login (28P01).'
         $dbSecure = Read-Host 'Existing AEGIS PostgreSQL password (hidden input)' -AsSecureString
         try {
@@ -195,6 +239,11 @@ try {
         throw "$detail Status: $dbStatus. Endpoint: 127.0.0.1:$dbPort."
     }
     Write-Host "PostgreSQL: READY on 127.0.0.1:$dbPort"
+    if ($CollectOnly) {
+        $secure = (Get-Content -LiteralPath $CredentialFile -Raw).Trim() | ConvertTo-SecureString
+        Invoke-FinamCollection -Key $secure -LookbackDays 7
+        return
+    }
     if ($redisStatus -ne 'READY') {
         throw "Redis did not answer on 127.0.0.1:$redisPort."
     }
@@ -245,23 +294,8 @@ try {
     }
     $dashboardUrl = "$baseUrl/dashboard"
     Write-Host "Dashboard: $dashboardUrl"
-    $endDay = [DateTime]::UtcNow.AddHours(3).Date
-    $start = $endDay.AddDays(-30).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
-    $end = $endDay.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
     $secure = Read-Host 'Finam API key (hidden input)' -AsSecureString
-    if ($secure.Length -eq 0) { throw 'No Finam API key was entered.' }
-    [Environment]::SetEnvironmentVariable(
-        'FINAM_API_TOKEN', ([pscredential]::new('finam', $secure)).GetNetworkCredential().Password, 'Process'
-    )
-    $reportJson = & $python -m worker collect --provider finam --symbols 'GAZP,GMKN' --adjustment raw --start $start --end $end
-    $collectExit = $LASTEXITCODE
-    [Environment]::SetEnvironmentVariable('FINAM_API_TOKEN', $null, 'Process')
-    $report = ($reportJson -join "`n") | ConvertFrom-Json
-    if ($collectExit -ne 0 -or $report.status -ne 'READY') {
-        Write-Host ($reportJson -join "`n")
-        throw "Finam collection returned $($report.status). The dashboard API is still running."
-    }
-    Write-Host "Finam: READY. Inserted $($report.counters.inserted), duplicates $($report.counters.duplicates)."
+    Invoke-FinamCollection -Key $secure -LookbackDays 30
 } finally {
     foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
