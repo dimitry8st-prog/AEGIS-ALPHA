@@ -17,18 +17,43 @@ function Invoke-Checked([string] $Program, [string[]] $Arguments) {
     }
 }
 
-function Get-ComposePort([string] $Service, [string] $InternalPort) {
-    $binding = Invoke-Checked docker ($compose + @('port', $Service, $InternalPort))
+function Get-PublishedPort([string[]] $Arguments) {
+    $binding = Invoke-Checked docker $Arguments
     if (($binding | Select-Object -First 1) -notmatch ':(\d+)$') {
-        throw "Could not determine the host port for $Service."
+        throw 'Could not determine the published Docker port.'
     }
     return [int] $Matches[1]
+}
+
+function Start-DashboardRelay {
+    $network = $composeConfig.networks.'aegis-network'.name
+    if (-not $network) { throw 'The AEGIS Docker network was not found.' }
+    $relay = "aegis-dashboard-relay-$shortRevision"
+    $label = "aegis.dashboard.relay=$Revision"
+    $existing = Invoke-Checked docker @('ps', '-a', '--filter', "name=^/$relay$", '--filter', "label=$label", '--format', '{{.Names}}')
+    if ($existing -eq $relay) {
+        Invoke-Checked docker @('start', $relay) | Out-Host
+    } else {
+        $config = Join-Path $checkout 'docker/dashboard/haproxy.cfg'
+        Invoke-Checked docker @(
+            'run', '-d', '--name', $relay, '--label', $label, '--network', $network,
+            '--publish', '127.0.0.1::15432', '--publish', '127.0.0.1::16379',
+            '--mount', "type=bind,source=$config,target=/usr/local/etc/haproxy/haproxy.cfg,readonly",
+            'haproxy:3.2-alpine'
+        ) | Out-Host
+    }
+    return @{
+        Postgres = Get-PublishedPort @('port', $relay, '15432/tcp')
+        Redis = Get-PublishedPort @('port', $relay, '16379/tcp')
+    }
 }
 
 function Test-Dashboard([string] $BaseUrl) {
     try {
         $health = Invoke-RestMethod -Uri "$BaseUrl/health" -TimeoutSec 2
-        return ($health.instance_id -eq $instance)
+        if ($health.instance_id -ne $instance) { return $false }
+        $ready = Invoke-RestMethod -Uri "$BaseUrl/ready" -TimeoutSec 3
+        return ($ready.status -eq 'ready')
     } catch {
         return $false
     }
@@ -41,7 +66,7 @@ function Get-DatabaseUrl([string] $Password) {
 
 function Test-Database([string] $Password) {
     [Environment]::SetEnvironmentVariable('DATABASE_URL', (Get-DatabaseUrl $Password), 'Process')
-    return Invoke-Checked $python @('scripts/check_dashboard_database.py')
+    return Invoke-Checked $python @('scripts/check_dashboard_dependencies.py')
 }
 
 $repo = (Resolve-Path -LiteralPath $Repository).Path
@@ -92,8 +117,8 @@ foreach ($setting in $runtimeEnv) {
 if (-not $postgres.POSTGRES_USER -or -not $postgres.POSTGRES_DB) {
     throw 'The running PostgreSQL container has no configured user or database.'
 }
-$dbPort = Get-ComposePort postgres 5432
-$redisPort = Get-ComposePort redis 6379
+$dbPort = Get-PublishedPort ($compose + @('port', 'postgres', '5432'))
+$redisPort = Get-PublishedPort ($compose + @('port', 'redis', '6379'))
 $dbUser = [uri]::EscapeDataString($postgres.POSTGRES_USER)
 $dbName = [uri]::EscapeDataString($postgres.POSTGRES_DB)
 
@@ -126,6 +151,21 @@ try {
         [Environment]::SetEnvironmentVariable($name, $environment[$name], 'Process')
     }
     $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
+    $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
+    $connectionFailures = @('08000', '08001', '08003', '08006', '08P01', 'TIMEOUT', 'UNREACHABLE')
+    if ($dbStatus -in $connectionFailures -or $redisStatus -ne 'READY') {
+        Write-Host "Direct ports: PostgreSQL $dbStatus, Redis $redisStatus. Opening new loopback ports."
+        $ports = Start-DashboardRelay
+        $dbPort = $ports.Postgres
+        $redisPort = $ports.Redis
+        [Environment]::SetEnvironmentVariable('REDIS_URL', "redis://127.0.0.1:$redisPort/0", 'Process')
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            $dbStatus = Test-Database $postgres.POSTGRES_PASSWORD
+            $redisStatus = Invoke-Checked $python @('scripts/check_dashboard_dependencies.py', 'redis')
+            if ($dbStatus -notin $connectionFailures -and $redisStatus -eq 'READY') { break }
+            Start-Sleep -Seconds 1
+        }
+    }
     if ($dbStatus -eq '28P01' -and $configuredPostgres.POSTGRES_USER -ceq $postgres.POSTGRES_USER -and
         $configuredPostgres.POSTGRES_DB -ceq $postgres.POSTGRES_DB -and
         $configuredPostgres.POSTGRES_PASSWORD -cne $postgres.POSTGRES_PASSWORD) {
@@ -147,6 +187,7 @@ try {
             '28000' { 'PostgreSQL does not allow this user or connection.' }
             '3D000' { 'The configured database does not exist in PostgreSQL.' }
             '42501' { 'The configured user does not have access to the database.' }
+            '08003' { 'PostgreSQL closed the connection on the local port.' }
             'TIMEOUT' { 'PostgreSQL did not answer on the published Docker port.' }
             'UNREACHABLE' { 'The published Docker port could not be reached.' }
             default { 'PostgreSQL connection check failed.' }
@@ -154,6 +195,9 @@ try {
         throw "$detail Status: $dbStatus. Endpoint: 127.0.0.1:$dbPort."
     }
     Write-Host "PostgreSQL: READY on 127.0.0.1:$dbPort"
+    if ($redisStatus -ne 'READY') {
+        throw "Redis did not answer on 127.0.0.1:$redisPort."
+    }
     $bcryptVersion = Invoke-Checked $python @(
         '-c', "from importlib.metadata import version, packages_distributions; print(version('bcrypt') if 'bcrypt' in packages_distributions() else 'missing')"
     )

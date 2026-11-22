@@ -1,11 +1,14 @@
-"""Check the local dashboard database without writing or logging credentials."""
+"""Check local dashboard dependencies without writing or logging credentials."""
 
 from __future__ import annotations
 
 import asyncio
 import os
+import sys
 
 import asyncpg
+from redis import Redis
+from redis.exceptions import RedisError
 
 
 async def database_status() -> str:
@@ -27,5 +30,15 @@ async def database_status() -> str:
     return "READY"
 
 
+def redis_status() -> str:
+    try:
+        with Redis.from_url(os.environ["REDIS_URL"], socket_connect_timeout=3, socket_timeout=3) as redis:
+            if redis.ping():
+                return "READY"
+    except (OSError, RedisError):
+        pass
+    return "UNREACHABLE"
+
+
 if __name__ == "__main__":
-    print(asyncio.run(database_status()))
+    print(redis_status() if sys.argv[1:] == ["redis"] else asyncio.run(database_status()))
