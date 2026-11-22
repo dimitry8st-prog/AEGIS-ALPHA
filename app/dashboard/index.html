@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AEGIS Alpha — Обзор рынка</title>
+  <link rel="stylesheet" href="/dashboard/assets/dashboard.css">
+  <script type="module" src="/dashboard/assets/dashboard.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#overview">К содержимому</a>
+  <aside class="sidebar">
+    <a href="#overview" class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>AEGIS <strong>Alpha</strong></span>
+    </a>
+    <nav aria-label="Разделы дашборда">
+      <a href="#overview"><span aria-hidden="true">▦</span>Обзор</a>
+      <a href="#quotes"><span aria-hidden="true">⏐╵</span>Котировки</a>
+      <a href="#runs"><span aria-hidden="true">≡</span>Сбор данных</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <span class="zone-dot" aria-hidden="true"></span>
+      <div>Московская биржа<small>MISX · UTC+3</small></div>
+    </div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar">
+      <span class="top-label">Рынок <span aria-hidden="true">/</span> Акции</span>
+      <div class="top-actions">
+        <span id="mode-label" class="mode-label">Данные AEGIS</span>
+        <button type="button" id="logout" class="button ghost" hidden>Выйти</button>
+      </div>
+    </header>
+
+    <main id="overview">
+      <div class="page-heading">
+        <div>
+          <h1>Обзор рынка</h1>
+          <p>Дневные котировки Финама и история загрузок</p>
+        </div>
+        <button type="button" class="button refresh" id="refresh" hidden><span aria-hidden="true">↻</span> Обновить</button>
+      </div>
+      <noscript><p class="notice">Включите JavaScript, чтобы открыть график и войти в AEGIS.</p></noscript>
+      <div class="notice" id="notice" role="status" hidden></div>
+
+      <section class="panel sign-in" id="sign-in" aria-labelledby="sign-in-title">
+        <div>
+          <h2 id="sign-in-title">Вход в AEGIS</h2>
+          <p>Войдите под своей учётной записью AEGIS, чтобы увидеть сохранённые котировки.</p>
+        </div>
+        <form id="login-form" method="post" action="/dashboard" hidden>
+          <label>Эл. почта
+            <input name="email" type="email" autocomplete="username" required>
+          </label>
+          <label>Пароль
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button class="button primary" type="submit">Войти</button>
+          <p id="login-error" role="alert" class="form-error" hidden></p>
+        </form>
+      </section>
+
+      <div id="market-content" hidden>
+        <section class="market-grid" aria-label="График и список инструментов">
+          <article class="panel quote-panel" id="quotes">
+            <header class="quote-header">
+              <div class="instrument-heading">
+                <div id="instrument-icon" class="instrument-icon gazp" aria-hidden="true">Г</div>
+                <div>
+                  <h2 id="instrument-name">Газпром</h2>
+                  <span id="instrument-symbol" class="instrument-meta">GAZP · MISX · 1D</span>
+                </div>
+              </div>
+              <div id="period" class="segment" role="group" aria-label="Период графика">
+                <button type="button" data-days="7" aria-pressed="false">7 дн.</button>
+                <button type="button" data-days="30" aria-pressed="true">1 мес.</button>
+                <button type="button" data-days="90" aria-pressed="false">3 мес.</button>
+              </div>
+            </header>
+            <div class="quote-number">
+              <strong id="close-price">—</strong><span class="price-unit">₽</span>
+              <span id="close-change" class="price-change" hidden></span>
+            </div>
+            <p id="series-period" class="series-period">Сохранённые дневные свечи · МСК</p>
+            <div class="chart-shell">
+              <div id="plot-heading" class="plot-heading" hidden>
+                <time id="plot-date"></time>
+                <dl id="plot-values" class="plot-values">
+                  <div><dt>Откр.</dt><dd id="bar-open">—</dd></div>
+                  <div><dt>Макс.</dt><dd id="bar-high">—</dd></div>
+                  <div><dt>Мин.</dt><dd id="bar-low">—</dd></div>
+                  <div><dt>Закр.</dt><dd id="bar-close">—</dd></div>
+                  <div><dt>Объём</dt><dd id="bar-volume">—</dd></div>
+                </dl>
+              </div>
+              <canvas id="chart" tabindex="0" aria-label="График свечей и объёма. Клавиши со стрелками показывают соседнюю свечу." aria-describedby="plot-values" hidden></canvas>
+              <p id="chart-empty" class="empty-state">Загрузка котировок…</p>
+            </div>
+            <div class="chart-footer">
+              <span><i class="legend-swatch up"></i>Рост</span>
+              <span><i class="legend-swatch down"></i>Снижение</span>
+              <span><i class="legend-swatch volume"></i>Объём</span>
+              <span class="chart-timezone">Даты сессий · МСК</span>
+            </div>
+          </article>
+
+          <aside class="panel watchlist">
+            <header>
+              <h2>Инструменты</h2>
+              <p>Исследовательский список</p>
+            </header>
+            <div id="instruments" class="instruments" role="group" aria-label="Выбор инструмента">
+              <button type="button" class="instrument-row" data-symbol="GAZP" aria-pressed="true">
+                <span class="instrument-icon gazp" aria-hidden="true">Г</span>
+                <span class="instrument-id"><strong>GAZP</strong><small>Газпром</small></span>
+                <span class="instrument-value"><strong id="price-GAZP">—</strong><small id="change-GAZP">—</small></span>
+              </button>
+              <button type="button" class="instrument-row" data-symbol="GMKN" aria-pressed="false">
+                <span class="instrument-icon gmkn" aria-hidden="true">Н</span>
+                <span class="instrument-id"><strong>GMKN</strong><small>Норникель</small></span>
+                <span class="instrument-value"><strong id="price-GMKN">—</strong><small id="change-GMKN">—</small></span>
+              </button>
+            </div>
+            <div class="source-block">
+              <span class="eyebrow">Источник</span>
+              <strong>Финам <span>·</span> Дневные свечи</strong>
+              <p>Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.</p>
+            </div>
+          </aside>
+        </section>
+
+        <section class="panel runs-panel" id="runs" aria-labelledby="runs-title">
+          <div class="runs-heading">
+            <div><h2 id="runs-title">История сбора</h2><p>Последние запуски загрузки из Финама</p></div>
+            <span class="run-count" id="run-count" hidden></span>
+          </div>
+          <div class="table-wrap" id="run-table" hidden>
+            <table>
+              <thead>
+                <tr><th scope="col">Запуск · МСК</th><th scope="col">Инструменты</th><th scope="col">Статус</th><th scope="col">Добавлено</th><th scope="col">Обновлено</th><th scope="col">Повторы</th><th scope="col">Карантин</th><th scope="col">Ошибки записи</th></tr>
+              </thead>
+              <tbody id="run-rows"></tbody>
+            </table>
+          </div>
+          <p id="runs-empty" class="empty-state runs-empty">Загрузка истории сборов…</p>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

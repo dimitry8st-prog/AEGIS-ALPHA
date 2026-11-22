@@ -4,9 +4,11 @@ AEGIS Backend Core - Production-Ready API Service
 import asyncio
 from contextlib import asynccontextmanager
 from html import escape
+from pathlib import Path
 from fastapi import FastAPI, Depends
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import structlog
 
 from app.core.config import settings
@@ -76,6 +78,26 @@ setup_exception_handlers(app)
 # Routers
 app.include_router(metrics_router, tags=["monitoring"])
 app.include_router(api_router, prefix="/api/v1")
+
+DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+app.mount("/dashboard/assets", StaticFiles(directory=DASHBOARD_DIR / "assets"), name="dashboard-assets")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def market_dashboard():
+    """Public dashboard shell. Market data still requires the existing API login."""
+    return FileResponse(
+        DASHBOARD_DIR / "index.html",
+        media_type="text/html",
+        headers={
+            "Content-Security-Policy": (
+                "default-src 'none'; script-src 'self'; style-src 'self'; "
+                "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 DEPENDENCY_TIMEOUT_SECONDS = 2.0

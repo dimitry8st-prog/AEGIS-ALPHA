@@ -7,6 +7,7 @@ psycopg2-binary==2.9.9
 redis==5.0.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.3.0  # Passlib 1.7.4's self-test is incompatible with bcrypt 5.
 python-multipart==0.0.6
 pydantic==2.5.0
 pydantic[email]>=2.0.0

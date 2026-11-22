@@ -41,6 +41,29 @@ async def _count(engine, table: str) -> int:
         return int((await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar())
 
 
+@pytest.mark.asyncio
+async def test_dashboard_shell_and_login_use_existing_market_permissions(migrated_engine):
+    email = f"dashboard-{uuid4()}@example.com"
+    credentials = {"email": email, "password": "dashboard-test-password"}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        shell = await client.get("/dashboard")
+        assert shell.status_code == 200
+        assert "/dashboard/assets/dashboard.js" in shell.text
+        assert "connect-src 'self'" in shell.headers["content-security-policy"]
+        assert (await client.get("/dashboard/assets/dashboard.js")).status_code == 200
+
+        anonymous = await client.get("/api/v1/market/runs?provider=finam")
+        assert anonymous.status_code in {401, 403}
+        registered = await client.post("/api/v1/auth/register", json=credentials)
+        assert registered.status_code == 201
+        login = await client.post("/api/v1/auth/login", json=credentials)
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        runs = await client.get("/api/v1/market/runs?provider=finam", headers=headers)
+        assert runs.status_code == 200
+
+
 async def _reader(engine) -> tuple[str, str]:
     user_id = uuid4()
     email = f"reader-{user_id}@example.com"

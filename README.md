@@ -86,6 +86,14 @@ Sprint 0, инфраструктура:
 - Prometheus и готовый дашборд Grafana
 - Docker Compose, данные лежат в именованных volumes
 
+### Дашборд котировок
+
+При запущенном API откройте [дашборд](http://localhost:8000/dashboard) и войдите
+под учётной записью AEGIS. График GAZP и GMKN показывает сохранённые дневные
+свечи Финама из PostgreSQL. История сборов использует те же отчёты, что и API.
+Если рабочая база пока пуста, сначала выполните сбор с провайдером `finam`.
+Для другого порта Compose подставьте значение `APP_PORT`.
+
 ## Market data worker (этап 1)
 
 Отдельный процесс `python -m worker` загружает дневные OHLCV (по умолчанию AAPL, MSFT, NVDA), проверяет строки, пишет в PostgreSQL и печатает JSON-отчёт `READY` / `PARTIAL` / `FAILED`. CLI завершается с ненулевым кодом при `FAILED`. API по-прежнему `uvicorn app.main:app`. Черновик `src/main.py` не запускается вместе с worker.
