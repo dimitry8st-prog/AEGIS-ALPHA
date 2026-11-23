@@ -65,9 +65,10 @@ export function mergeMinuteBars(prior = [], rows = [], preferExisting = false) {
     .slice(-120);
 }
 
-export function historyStatusText({ loading, errorLabel, barCount }) {
+export function historyStatusText({ loading, errorLabel, barCount, status } = {}) {
   if (loading) return "История M1: загрузка…";
   if (errorLabel) return errorLabel;
+  if (status === "PARTIAL" && barCount > 0) return "История M1: загружена частично";
   if (barCount > 0) return "История M1: загружена";
   return "История M1: в окне нет свечей";
 }
@@ -83,4 +84,10 @@ export function streamStatusText({ connecting, connected, waiting, errorLabel })
 export function lastCandleTime(bars = []) {
   const last = bars.at(-1);
   return last?.quote_time || null;
+}
+
+export function latestLiveQuote(quote, bars) {
+  const candleTime = lastCandleTime(bars);
+  if (quote && (!candleTime || Date.parse(quote.quote_time) >= Date.parse(candleTime))) return quote;
+  return null;
 }

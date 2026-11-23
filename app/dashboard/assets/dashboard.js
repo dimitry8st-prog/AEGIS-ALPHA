@@ -3,6 +3,7 @@ import {
   classifyLiveFailure,
   historyStatusText,
   lastCandleTime,
+  latestLiveQuote,
   mergeMinuteBars,
   streamStatusText,
 } from "./live.js";
@@ -31,6 +32,7 @@ const quoteTime = new Intl.DateTimeFormat("ru-RU", {
 });
 const calendar = new Intl.DateTimeFormat("sv-SE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: moscow });
 const oneDay = 86_400_000;
+const minuteMs = 60_000;
 
 let token = null;
 let selected = "GAZP";
@@ -45,9 +47,9 @@ let registering = false;
 let liveMode = false;
 let historyRequest = null;
 let streamRequest = null;
+let historyRefresh = null;
 let liveRetry = null;
-let historyLoading = false;
-let historyError = "";
+let historyBySymbol = {};
 let streamConnecting = false;
 let streamConnected = false;
 let streamWaiting = false;
@@ -144,19 +146,11 @@ function changeText(node, values, showWhenMissing) {
   node.classList.toggle("negative", available && change < 0);
 }
 
-function liveBarCount() {
-  return Object.values(liveBars).reduce((total, rows) => total + (rows?.length || 0), 0);
-}
-
 function renderLiveStatus() {
   const box = byId("live-status");
   box.hidden = !liveMode;
   if (!liveMode) return;
-  byId("live-history-state").textContent = historyStatusText({
-    loading: historyLoading,
-    errorLabel: historyError,
-    barCount: liveBarCount(),
-  });
+  byId("live-history-state").textContent = historyStatusText(historyBySymbol[selected]);
   byId("live-stream-state").textContent = streamStatusText({
     connecting: streamConnecting,
     connected: streamConnected,
@@ -175,7 +169,7 @@ function renderQuotes() {
   const icon = byId("instrument-icon");
   icon.textContent = instrument.letter;
   icon.className = "instrument-icon " + selected.toLowerCase();
-  const tick = liveQuotes[selected];
+  const tick = latestLiveQuote(liveQuotes[selected], quotesNow);
   const latestPrice = liveMode ? (tick?.last ?? last?.close) : last?.close;
   byId("close-price").textContent = latestPrice ? rub.format(latestPrice) : "—";
   changeText(byId("close-change"), liveMode ? [] : quotesNow, false);
@@ -184,7 +178,7 @@ function renderQuotes() {
   byId("chart-timezone").textContent = liveMode ? "Время свечей · МСК" : "Даты сессий · МСК";
   byId("chart-source").textContent = liveMode ? "Финам · История и поток M1" : "Финам · Дневные свечи";
   byId("chart-source-note").textContent = liveMode
-    ? "История M1 загружается через REST независимо от потока. Цена и время котировки обновляются из потока."
+    ? "История M1 обновляется каждую минуту. Когда поток недоступен, панель показывает цену последней полученной свечи."
     : "Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.";
   const candleStamp = lastCandleTime(quotesNow);
   byId("series-period").textContent = liveMode
@@ -197,14 +191,15 @@ function renderQuotes() {
       : "Сохранённые дневные свечи · МСК");
   for (const button of byId("instruments").querySelectorAll("button")) {
     const symbol = button.dataset.symbol;
-    const series = quotes[symbol] || [];
+    const series = (liveMode ? liveBars : quotes)[symbol] || [];
     button.setAttribute("aria-pressed", String(selected === symbol));
-    const value = liveMode ? (liveQuotes[symbol]?.last ?? liveBars[symbol]?.at(-1)?.close) : series.at(-1)?.close;
+    const quote = liveMode ? latestLiveQuote(liveQuotes[symbol], series) : null;
+    const value = quote?.last ?? series.at(-1)?.close;
     byId("price-" + symbol).textContent = value ? rub.format(value) + " ₽" : "—";
     const change = byId("change-" + symbol);
     if (liveMode) {
       change.classList.remove("positive", "negative");
-      const stamp = liveQuotes[symbol]?.quote_time || lastCandleTime(liveBars[symbol] || []);
+      const stamp = quote?.quote_time || lastCandleTime(series);
       change.textContent = stamp ? quoteTime.format(new Date(stamp)) : "—";
     } else {
       changeText(change, series, true);
@@ -217,8 +212,9 @@ function renderQuotes() {
   if (loading) message = "Загрузка котировок…";
   if (loadError) message = "Котировки недоступны.";
   if (liveMode) {
-    if (historyLoading && !quotesNow.length) message = "Загрузка минутных свечей…";
-    else if (historyError && !quotesNow.length) message = "История M1 недоступна.";
+    const history = historyBySymbol[selected];
+    if (history?.loading) message = "Загрузка минутных свечей…";
+    else if (history?.errorLabel) message = "История M1 недоступна.";
     else message = "Пока нет минутных свечей в этом окне.";
   }
   renderChart(quotesNow, message, liveMode);
@@ -255,8 +251,7 @@ function render() {
 }
 
 function resetLiveLabels() {
-  historyLoading = false;
-  historyError = "";
+  historyBySymbol = {};
   streamConnecting = false;
   streamConnected = false;
   streamWaiting = false;
@@ -292,6 +287,8 @@ function stopStream() {
 
 function stopLive() {
   stopStream();
+  clearInterval(historyRefresh);
+  historyRefresh = null;
   historyRequest?.abort();
   historyRequest = null;
 }
@@ -301,37 +298,38 @@ function mergeMinutes(symbol, rows, preferExisting = false) {
 }
 
 async function loadMinuteHistory() {
-  if (!token) return;
-  historyRequest?.abort();
+  if (!token || !liveMode || historyRequest) return;
   const current = new AbortController();
   historyRequest = current;
-  historyLoading = true;
-  historyError = "";
+  const symbols = Object.keys(instruments);
+  for (const symbol of symbols) historyBySymbol[symbol] ??= { loading: true };
   renderQuotes();
   const options = { signal: current.signal, headers: { Authorization: "Bearer " + token } };
-  const end = Math.floor(Date.now() / 60000) * 60000;
-  const start = new Date(end - 120 * 60000).toISOString();
-  const results = await Promise.allSettled(Object.keys(instruments).map(async symbol => {
-    const query = new URLSearchParams({ symbol, start, end: new Date(end).toISOString() });
-    const snapshot = await json(api + "/market/finam/minutes?" + query, options);
-    if (!current.signal.aborted) mergeMinutes(symbol, snapshot.items, true);
-    return snapshot;
-  }));
-  if (historyRequest !== current || current.signal.aborted) return;
-  historyLoading = false;
-  const failure = results.find(result => result.status === "rejected")?.reason;
-  if (failure) {
-    if ([401, 403].includes(failure.status)) {
-      signOut("Сессия закончилась. Войдите снова.");
-      return;
-    }
-    if (!liveBarCount()) {
-      historyError = classifyLiveFailure(failure, "history").label;
-    }
-  } else {
-    historyError = "";
+  const end = Math.floor(Date.now() / minuteMs) * minuteMs;
+  const start = new Date(end - 120 * minuteMs).toISOString();
+  try {
+    await Promise.all(symbols.map(async symbol => {
+      const query = new URLSearchParams({ symbol, start, end: new Date(end).toISOString() });
+      try {
+        const snapshot = await json(api + "/market/finam/minutes?" + query, options);
+        if (current.signal.aborted) return;
+        mergeMinutes(symbol, snapshot.items, true);
+        historyBySymbol[symbol] = { barCount: snapshot.items.length, status: snapshot.status };
+      } catch (error) {
+        if (current.signal.aborted) return;
+        if ([401, 403].includes(error.status)) {
+          signOut("Сессия закончилась. Войдите снова.");
+          return;
+        }
+        const failure = classifyLiveFailure(error, "history");
+        const detail = error.code ? ` (${failure.code})` : "";
+        historyBySymbol[symbol] = { errorLabel: failure.label + detail };
+      }
+      renderQuotes();
+    }));
+  } finally {
+    if (historyRequest === current) historyRequest = null;
   }
-  renderQuotes();
 }
 
 async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
@@ -342,7 +340,10 @@ async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
   streamConnected = false;
   streamWaiting = false;
   streamError = "";
-  if (refreshHistory) void loadMinuteHistory();
+  if (refreshHistory) {
+    void loadMinuteHistory();
+    historyRefresh ??= setInterval(loadMinuteHistory, minuteMs);
+  }
   const current = new AbortController();
   streamRequest = current;
   const options = { signal: current.signal, headers: { Authorization: "Bearer " + token } };
@@ -355,8 +356,6 @@ async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
         streamConnected = true;
         streamWaiting = true;
         streamError = "";
-        // Intentional history refresh after reconnect; stream abort never cancels it.
-        void loadMinuteHistory();
       } else if (event.type === "error") {
         throw Object.assign(new Error("Finam stream error"), {
           code: event.code,

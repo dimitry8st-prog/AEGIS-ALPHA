@@ -6,6 +6,7 @@ import {
   failureStage,
   historyStatusText,
   lastCandleTime,
+  latestLiveQuote,
   mergeMinuteBars,
   streamStatusText,
 } from "../app/dashboard/assets/live.js";
@@ -34,6 +35,21 @@ test("connected stream without trades keeps waiting status", () => {
     streamStatusText({ connecting: false, connected: true, waiting: true, errorLabel: "" }),
     "Поток: подключён · ждём рыночные данные",
   );
+});
+
+test("minute history distinguishes an incomplete or failed response from a loaded window", () => {
+  assert.equal(historyStatusText({ status: "PARTIAL", barCount: 12 }), "История M1: загружена частично");
+  assert.equal(historyStatusText({ status: "EMPTY", barCount: 0 }), "История M1: в окне нет свечей");
+  assert.equal(historyStatusText({ errorLabel: "История M1 недоступна.", barCount: 12 }), "История M1 недоступна.");
+});
+
+test("the last REST candle takes precedence over a stale stream quote", () => {
+  const candles = [{ quote_time: "2026-11-20T07:12:00Z", close: "105.10" }];
+  const staleQuote = { quote_time: "2026-11-20T07:11:55Z", last: "105.03" };
+  const currentQuote = { quote_time: "2026-11-20T07:12:04Z", last: "105.20" };
+  assert.equal(latestLiveQuote(staleQuote, candles), null);
+  assert.equal(latestLiveQuote(currentQuote, candles), currentQuote);
+  assert.equal(latestLiveQuote(staleQuote, []), staleQuote);
 });
 
 test("recovery merges a repeated candle without duplicates", () => {
