@@ -21,8 +21,11 @@ async def test_market_sources_require_aegis_authentication():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("symbol, n, status", [("GAZP", 1, "PARTIAL"), ("GMKN", 2, "READY")])
-async def test_api_reads_both_finam_symbols_and_keeps_key_private(monkeypatch, symbol, n, status):
+@pytest.mark.parametrize("symbol, n, invalid, status", [
+    ("GAZP", 1, False, "PARTIAL"), ("GMKN", 2, False, "READY"),
+    ("GAZP", 2, True, "PARTIAL"), ("GAZP", 0, True, "INVALID"),
+])
+async def test_api_reads_both_finam_symbols_and_keeps_key_private(monkeypatch, symbol, n, invalid, status):
     secret = "test-only-finam-secret"
 
     def broker(request):
@@ -41,6 +44,8 @@ async def test_api_reads_both_finam_symbols_and_keeps_key_private(monkeypatch, s
             }
             for minute in range(10, 10 + n)
         ]
+        if invalid:
+            rows.append({"timestamp": "2026-11-20T07:12:00Z"})
         return httpx.Response(200, json={"symbol": f"{symbol}@MISX", "bars": rows})
 
     monkeypatch.setitem(app.dependency_overrides, get_current_active_user, lambda: object())
@@ -54,7 +59,9 @@ async def test_api_reads_both_finam_symbols_and_keeps_key_private(monkeypatch, s
     assert (body["symbol"], body["interval"], body["status"], body["expected_minutes"]) == (
         symbol, "1m", status, 2,
     )
-    assert len(body["items"]) == n and body["items"][0]["open"] == "123.56"
+    assert len(body["items"]) == n
+    assert all(row["open"] == "123.56" for row in body["items"])
+    assert body["rejected"] == ({"outside_window": 1} if invalid else {})
     assert secret not in response.text
 
 

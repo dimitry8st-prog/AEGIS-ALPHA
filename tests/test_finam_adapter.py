@@ -243,3 +243,24 @@ async def test_m1_uses_utc_and_excludes_the_window_end(bad_timestamp):
                 "2026-11-20T07:10:00+00:00", "2026-11-20T07:11:00+00:00",
             ]
             assert all(row.interval == "1m" and row.currency == "RUB" for row in bars)
+
+
+@pytest.mark.asyncio
+async def test_minute_history_keeps_valid_rows_and_excludes_conflicting_minutes():
+    def handler(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"token": JWT})
+        start = "2026-11-20T07:10:00Z"
+        conflict = "2026-11-20T07:11:00Z"
+        return httpx.Response(200, json={"symbol": "GAZP@MISX", "bars": [
+            bar(start), bar(start), bar(conflict), bar(conflict, close={"value": "124.7"}),
+            bar("2026-11-20T07:12:00Z", volume={"value": "-1"}), bar("invalid"),
+        ]})
+
+    start = datetime.fromisoformat("2026-11-20T07:10:00Z")
+    end = datetime.fromisoformat("2026-11-20T07:13:00Z")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = FinamAdapter(SECRET, client=client)
+        history = await adapter.fetch_minute_history("GAZP", start, end)
+    assert [candle.quote_time for candle in history.bars] == [start]
+    assert history.rejected == {"duplicate": 1, "conflict": 2, "ohlcv": 1, "timestamp": 1}

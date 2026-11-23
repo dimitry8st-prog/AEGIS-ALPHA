@@ -290,7 +290,7 @@ async def read_finam_minutes(
     del current_user
     token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
     try:
-        bars = await FinamAdapter(token).fetch_minutes(symbol, start, end)
+        history = await FinamAdapter(token).fetch_minute_history(symbol, start, end)
     except TransientIOError as exc:
         raise AppException(code=exc.code, message=str(exc), status_code=503) from exc
     except PermanentIOError as exc:
@@ -299,12 +299,20 @@ async def read_finam_minutes(
 
     start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
     expected = (end - start) // timedelta(minutes=1)
+    bars = history.bars
+    if history.rejected:
+        logger.warning("Finam minute history rejected rows", symbol=symbol, reasons=history.rejected)
+    if not bars:
+        status = "INVALID" if history.rejected else "EMPTY"
+    else:
+        status = "READY" if len(bars) == expected and not history.rejected else "PARTIAL"
     return FinamMinutes(
         symbol=symbol,
         start=start,
         end=end,
         expected_minutes=expected,
-        status="READY" if len(bars) == expected else ("PARTIAL" if bars else "EMPTY"),
+        status=status,
+        rejected=history.rejected,
         items=[FinamMinute(
             quote_time=bar.quote_time, open=str(bar.open), high=str(bar.high),
             low=str(bar.low), close=str(bar.close), volume=bar.volume,

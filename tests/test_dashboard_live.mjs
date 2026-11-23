@@ -41,6 +41,8 @@ test("minute history distinguishes an incomplete or failed response from a loade
   assert.equal(historyStatusText({ status: "PARTIAL", barCount: 12 }), "История M1: загружена частично");
   assert.equal(historyStatusText({ status: "EMPTY", barCount: 0 }), "История M1: в окне нет свечей");
   assert.equal(historyStatusText({ errorLabel: "История M1 недоступна.", barCount: 12 }), "История M1 недоступна.");
+  assert.match(historyStatusText({ status: "INVALID", rejected: { ohlcv: 3 } }), /все строки отклонены.*цены или объём.*3/);
+  assert.match(streamStatusText({ connected: true, hasRejectedData: true }), /подключён.*некорректные данные/);
 });
 
 test("the last REST candle takes precedence over a stale stream quote", () => {

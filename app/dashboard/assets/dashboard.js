@@ -54,6 +54,7 @@ let streamConnecting = false;
 let streamConnected = false;
 let streamWaiting = false;
 let streamError = "";
+let streamRejectedData = false;
 let liveBars = {};
 let liveQuotes = {};
 
@@ -156,6 +157,7 @@ function renderLiveStatus() {
     connected: streamConnected,
     waiting: streamWaiting,
     errorLabel: streamError,
+    hasRejectedData: streamRejectedData,
   });
 }
 
@@ -214,7 +216,7 @@ function renderQuotes() {
   if (liveMode) {
     const history = historyBySymbol[selected];
     if (history?.loading) message = "Загрузка минутных свечей…";
-    else if (history?.errorLabel) message = "История M1 недоступна.";
+    else if (history?.errorLabel || history?.status === "INVALID") message = "История M1 недоступна.";
     else message = "Пока нет минутных свечей в этом окне.";
   }
   renderChart(quotesNow, message, liveMode);
@@ -256,6 +258,7 @@ function resetLiveLabels() {
   streamConnected = false;
   streamWaiting = false;
   streamError = "";
+  streamRejectedData = false;
 }
 
 function signOut(message = "") {
@@ -314,7 +317,9 @@ async function loadMinuteHistory() {
         const snapshot = await json(api + "/market/finam/minutes?" + query, options);
         if (current.signal.aborted) return;
         mergeMinutes(symbol, snapshot.items, true);
-        historyBySymbol[symbol] = { barCount: snapshot.items.length, status: snapshot.status };
+        historyBySymbol[symbol] = {
+          barCount: snapshot.items.length, status: snapshot.status, rejected: snapshot.rejected,
+        };
       } catch (error) {
         if (current.signal.aborted) return;
         if ([401, 403].includes(error.status)) {
@@ -340,6 +345,7 @@ async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
   streamConnected = false;
   streamWaiting = false;
   streamError = "";
+  streamRejectedData = false;
   if (refreshHistory) {
     void loadMinuteHistory();
     historyRefresh ??= setInterval(loadMinuteHistory, minuteMs);
@@ -356,6 +362,8 @@ async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
         streamConnected = true;
         streamWaiting = true;
         streamError = "";
+      } else if (event.type === "data_warning") {
+        streamRejectedData = true;
       } else if (event.type === "error") {
         throw Object.assign(new Error("Finam stream error"), {
           code: event.code,
