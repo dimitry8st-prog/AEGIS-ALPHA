@@ -81,3 +81,34 @@ async def test_api_stream_requires_login_and_does_not_forward_broker_jwt(monkeyp
     assert response.headers["content-type"] == "application/x-ndjson"
     assert [json.loads(row)["type"] for row in response.text.splitlines()] == ["connected", "quote"]
     assert "private-broker-jwt" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_stream_maps_authorization_failure_to_stage(monkeypatch):
+    from worker.io_retry import PermanentIOError
+
+    class Socket:
+        def __init__(self):
+            self.incoming = iter([
+                {"type": "ERROR", "error_info": {"type": "UNAUTHENTICATED"}},
+            ])
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def recv(self):
+            return json.dumps(next(self.incoming))
+
+        async def send(self, data):
+            pass
+
+    monkeypatch.setattr(finam_stream, "connect", lambda url, **kwargs: Socket())
+    with pytest.raises(PermanentIOError) as raised:
+        async with aclosing(finam_stream.stream_finam_market("mock-broker-jwt")) as feed:
+            await anext(feed)
+    assert raised.value.code == "FINAM_AUTHORIZATION_FAILED"
+    from worker.finam_live_status import live_failure_stage
+    assert live_failure_stage(raised.value.code) == "authorization"

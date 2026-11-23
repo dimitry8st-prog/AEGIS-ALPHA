@@ -1,4 +1,11 @@
 import { renderChart } from "./chart.js";
+import {
+  classifyLiveFailure,
+  historyStatusText,
+  lastCandleTime,
+  mergeMinuteBars,
+  streamStatusText,
+} from "./live.js";
 import { readMarketStream } from "./stream.js";
 
 const byId = id => document.getElementById(id);
@@ -36,15 +43,17 @@ let loading = false;
 let loadError = false;
 let registering = false;
 let liveMode = false;
-let liveRequest = null;
+let historyRequest = null;
+let streamRequest = null;
 let liveRetry = null;
-let liveLabel = "";
+let historyLoading = false;
+let historyError = "";
+let streamConnecting = false;
+let streamConnected = false;
+let streamWaiting = false;
+let streamError = "";
 let liveBars = {};
 let liveQuotes = {};
-const liveErrors = {
-  FINAM_NOT_CONFIGURED: "Запустите AEGIS с ключом Финама «Просмотр».",
-  FINAM_AUTHORIZATION_FAILED: "Финам отклонил доступ к рыночному потоку.",
-};
 
 function updateNote(message) {
   byId("notice").textContent = message;
@@ -61,7 +70,13 @@ function toggleMarket(visible) {
 
 async function json(url, options = {}) {
   const response = await fetch(url, { ...options, cache: "no-store", redirect: "error" });
-  if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw Object.assign(new Error("HTTP " + response.status), {
+      status: response.status,
+      code: body.error?.code,
+    });
+  }
   return response.json();
 }
 
@@ -129,6 +144,27 @@ function changeText(node, values, showWhenMissing) {
   node.classList.toggle("negative", available && change < 0);
 }
 
+function liveBarCount() {
+  return Object.values(liveBars).reduce((total, rows) => total + (rows?.length || 0), 0);
+}
+
+function renderLiveStatus() {
+  const box = byId("live-status");
+  box.hidden = !liveMode;
+  if (!liveMode) return;
+  byId("live-history-state").textContent = historyStatusText({
+    loading: historyLoading,
+    errorLabel: historyError,
+    barCount: liveBarCount(),
+  });
+  byId("live-stream-state").textContent = streamStatusText({
+    connecting: streamConnecting,
+    connected: streamConnected,
+    waiting: streamWaiting,
+    errorLabel: streamError,
+  });
+}
+
 function renderQuotes() {
   const quotesNow = (liveMode ? liveBars : quotes)[selected] || [];
   const first = quotesNow[0];
@@ -143,17 +179,20 @@ function renderQuotes() {
   const latestPrice = liveMode ? (tick?.last ?? last?.close) : last?.close;
   byId("close-price").textContent = latestPrice ? rub.format(latestPrice) : "—";
   changeText(byId("close-change"), liveMode ? [] : quotesNow, false);
-  const state = byId("live-state");
-  state.hidden = !liveMode;
-  if (state.textContent !== liveLabel) state.textContent = liveLabel;
+  renderLiveStatus();
   byId("live-mode").setAttribute("aria-pressed", String(liveMode));
   byId("chart-timezone").textContent = liveMode ? "Время свечей · МСК" : "Даты сессий · МСК";
-  byId("chart-source").textContent = liveMode ? "Финам · Поток M1" : "Финам · Дневные свечи";
+  byId("chart-source").textContent = liveMode ? "Финам · История и поток M1" : "Финам · Дневные свечи";
   byId("chart-source-note").textContent = liveMode
-    ? "Цена и время последней полученной котировки. Минутная свеча обновляется до закрытия."
+    ? "История M1 загружается через REST независимо от потока. Цена и время котировки обновляются из потока."
     : "Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.";
+  const candleStamp = lastCandleTime(quotesNow);
   byId("series-period").textContent = liveMode
-    ? (tick ? "Котировка · " + quoteTime.format(new Date(tick.quote_time)) + " МСК" : "Минутные свечи · МСК")
+    ? (tick
+      ? "Котировка · " + quoteTime.format(new Date(tick.quote_time)) + " МСК"
+      : candleStamp
+        ? "Последняя свеча · " + quoteTime.format(new Date(candleStamp)) + " МСК"
+        : "Минутные свечи · МСК")
     : (first ? dayLabel.formatRange(new Date(first.quote_time), new Date(last.quote_time))
       : "Сохранённые дневные свечи · МСК");
   for (const button of byId("instruments").querySelectorAll("button")) {
@@ -165,7 +204,8 @@ function renderQuotes() {
     const change = byId("change-" + symbol);
     if (liveMode) {
       change.classList.remove("positive", "negative");
-      change.textContent = liveQuotes[symbol] ? quoteTime.format(new Date(liveQuotes[symbol].quote_time)) : "—";
+      const stamp = liveQuotes[symbol]?.quote_time || lastCandleTime(liveBars[symbol] || []);
+      change.textContent = stamp ? quoteTime.format(new Date(stamp)) : "—";
     } else {
       changeText(change, series, true);
     }
@@ -176,7 +216,12 @@ function renderQuotes() {
   let message = "В базе нет свечей за выбранный период.";
   if (loading) message = "Загрузка котировок…";
   if (loadError) message = "Котировки недоступны.";
-  renderChart(quotesNow, liveMode ? "Пока нет минутных свечей в этом окне." : message, liveMode);
+  if (liveMode) {
+    if (historyLoading && !quotesNow.length) message = "Загрузка минутных свечей…";
+    else if (historyError && !quotesNow.length) message = "История M1 недоступна.";
+    else message = "Пока нет минутных свечей в этом окне.";
+  }
+  renderChart(quotesNow, message, liveMode);
 }
 
 function renderRuns() {
@@ -209,11 +254,21 @@ function render() {
   byId("refresh").disabled = !liveMode && loading;
 }
 
+function resetLiveLabels() {
+  historyLoading = false;
+  historyError = "";
+  streamConnecting = false;
+  streamConnected = false;
+  streamWaiting = false;
+  streamError = "";
+}
+
 function signOut(message = "") {
   stopLive();
   liveMode = false;
   liveBars = {};
   liveQuotes = {};
+  resetLiveLabels();
   request?.abort();
   request = null;
   token = null;
@@ -228,51 +283,91 @@ function signOut(message = "") {
   byId("login-form").elements.email.focus();
 }
 
-function stopLive() {
-  liveRequest?.abort();
-  liveRequest = null;
+function stopStream() {
+  streamRequest?.abort();
+  streamRequest = null;
   clearTimeout(liveRetry);
+  liveRetry = null;
 }
 
-function mergeMinutes(symbol, rows, preferStream = false) {
-  const prior = liveBars[symbol] || [];
-  const combined = preferStream ? [...rows, ...prior] : [...prior, ...rows];
-  const deduplicated = new Map(combined.map(row => [Date.parse(row.quote_time), row]));
-  liveBars[symbol] = [...deduplicated.values()]
-    .sort((a, b) => Date.parse(a.quote_time) - Date.parse(b.quote_time)).slice(-120);
+function stopLive() {
+  stopStream();
+  historyRequest?.abort();
+  historyRequest = null;
 }
 
-async function refreshMinuteHistory(options) {
+function mergeMinutes(symbol, rows, preferExisting = false) {
+  liveBars[symbol] = mergeMinuteBars(liveBars[symbol] || [], rows, preferExisting);
+}
+
+async function loadMinuteHistory() {
+  if (!token) return;
+  historyRequest?.abort();
+  const current = new AbortController();
+  historyRequest = current;
+  historyLoading = true;
+  historyError = "";
+  renderQuotes();
+  const options = { signal: current.signal, headers: { Authorization: "Bearer " + token } };
   const end = Math.floor(Date.now() / 60000) * 60000;
   const start = new Date(end - 120 * 60000).toISOString();
-  await Promise.allSettled(Object.keys(instruments).map(async symbol => {
+  const results = await Promise.allSettled(Object.keys(instruments).map(async symbol => {
     const query = new URLSearchParams({ symbol, start, end: new Date(end).toISOString() });
     const snapshot = await json(api + "/market/finam/minutes?" + query, options);
-    if (!options.signal.aborted) mergeMinutes(symbol, snapshot.items, true);
+    if (!current.signal.aborted) mergeMinutes(symbol, snapshot.items, true);
+    return snapshot;
   }));
-  if (!options.signal.aborted) renderQuotes();
+  if (historyRequest !== current || current.signal.aborted) return;
+  historyLoading = false;
+  const failure = results.find(result => result.status === "rejected")?.reason;
+  if (failure) {
+    if ([401, 403].includes(failure.status)) {
+      signOut("Сессия закончилась. Войдите снова.");
+      return;
+    }
+    if (!liveBarCount()) {
+      historyError = classifyLiveFailure(failure, "history").label;
+    }
+  } else {
+    historyError = "";
+  }
+  renderQuotes();
 }
 
-async function startLive(retryDelay = 3000) {
+async function startLive(retryDelay = 3000, { refreshHistory = true } = {}) {
   if (!token) return;
-  stopLive();
   liveMode = true;
+  stopStream();
+  streamConnecting = true;
+  streamConnected = false;
+  streamWaiting = false;
+  streamError = "";
+  if (refreshHistory) void loadMinuteHistory();
   const current = new AbortController();
-  liveRequest = current;
+  streamRequest = current;
   const options = { signal: current.signal, headers: { Authorization: "Bearer " + token } };
-  liveLabel = "Подключение к Финаму…";
   render();
   try {
     for await (const event of readMarketStream(api + "/market/finam/stream", options)) {
       if (current.signal.aborted) return;
       if (event.type === "connected") {
-        liveLabel = "Поток подключён · ждём рыночные данные";
-        void refreshMinuteHistory(options);
+        streamConnecting = false;
+        streamConnected = true;
+        streamWaiting = true;
+        streamError = "";
+        // Intentional history refresh after reconnect; stream abort never cancels it.
+        void loadMinuteHistory();
       } else if (event.type === "error") {
-        throw Object.assign(new Error("Finam stream error"), { code: event.code });
+        throw Object.assign(new Error("Finam stream error"), {
+          code: event.code,
+          stage: event.stage,
+        });
       } else if (event.type === "quote" || event.type === "bar") {
         retryDelay = 3000;
-        liveLabel = "Поток Финама подключён";
+        streamConnecting = false;
+        streamConnected = true;
+        streamWaiting = false;
+        streamError = "";
         if (event.type === "quote") {
           const previous = liveQuotes[event.symbol];
           if (!previous || Date.parse(event.quote_time) >= Date.parse(previous.quote_time)) {
@@ -292,16 +387,28 @@ async function startLive(retryDelay = 3000) {
       signOut("Сессия закончилась. Войдите снова.");
       return;
     }
-    if (liveErrors[error.code]) {
-      liveLabel = liveErrors[error.code];
-      renderQuotes();
+    const failure = classifyLiveFailure(error, "stream");
+    streamConnecting = false;
+    streamConnected = false;
+    streamWaiting = false;
+    streamError = failure.label;
+    renderQuotes();
+    if (failure.code === "FINAM_NOT_CONFIGURED" || failure.code === "FINAM_AUTHORIZATION_FAILED") {
       return;
     }
   }
-  if (current.signal.aborted) return;
-  liveLabel = "Поток прерван · переподключение…";
+  if (current.signal.aborted || streamRequest !== current) return;
+  if (!streamError) {
+    streamConnecting = false;
+    streamConnected = false;
+    streamWaiting = false;
+    streamError = "Поток прерван · переподключение…";
+  }
   renderQuotes();
-  liveRetry = setTimeout(() => startLive(Math.min(retryDelay * 2, 30000)), retryDelay);
+  liveRetry = setTimeout(
+    () => startLive(Math.min(retryDelay * 2, 30000), { refreshHistory: false }),
+    retryDelay,
+  );
 }
 
 const loginForm = byId("login-form");
@@ -372,8 +479,8 @@ byId("login-form").addEventListener("submit", async event => {
 });
 
 byId("logout").addEventListener("click", () => signOut());
-byId("refresh").addEventListener("click", () => liveMode ? startLive() : load());
-byId("live-mode").addEventListener("click", () => startLive());
+byId("refresh").addEventListener("click", () => liveMode ? startLive(3000, { refreshHistory: true }) : load());
+byId("live-mode").addEventListener("click", () => startLive(3000, { refreshHistory: true }));
 for (const button of byId("instruments").querySelectorAll("button")) {
   button.addEventListener("click", () => {
     selected = button.dataset.symbol;
@@ -386,6 +493,9 @@ for (const button of byId("period").querySelectorAll("[data-days]")) {
     if (days === next && !liveMode) return;
     stopLive();
     liveMode = false;
+    liveBars = {};
+    liveQuotes = {};
+    resetLiveLabels();
     days = next;
     load();
   });

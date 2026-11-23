@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
@@ -27,10 +28,13 @@ from app.schemas.market import FinamMinute, FinamMinutes, IpoReport, QuotePage, 
 from app.core.config import settings
 from worker.adapters.finam_adapter import FinamAdapter
 from worker.adapters.finam_stream import stream_finam_market
+from worker.finam_live_status import live_failure_stage
 from worker.io_retry import PermanentIOError, TransientIOError
 from worker.ipo import search_ipos
 from worker.russian_market import provider_timezone
 from worker.portfolio import research_portfolio
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -314,6 +318,13 @@ async def _authenticate_stream(credentials: HTTPAuthorizationCredentials = Depen
         await get_current_user(credentials, db)
 
 
+def _log_live_failure(code: str) -> str:
+    stage = live_failure_stage(code)
+    # Keep broker tokens and response bodies out of the journal.
+    logger.warning("Finam live stream failed", code=code, stage=stage)
+    return stage
+
+
 async def _live_events(jwt: str):
     try:
         # Periodic reconnection renews the upstream session and validates the AEGIS login.
@@ -324,7 +335,8 @@ async def _live_events(jwt: str):
     except TimeoutError:
         return
     except (PermanentIOError, TransientIOError) as exc:
-        yield json.dumps({"type": "error", "code": exc.code}) + "\n"
+        stage = _log_live_failure(exc.code)
+        yield json.dumps({"type": "error", "code": exc.code, "stage": stage}, separators=(",", ":")) + "\n"
 
 
 @router.get(
@@ -339,8 +351,10 @@ async def live_finam_market():
     try:
         jwt = await FinamAdapter(token).open_market_session()
     except TransientIOError as exc:
+        _log_live_failure(exc.code)
         raise AppException(code=exc.code, message=str(exc), status_code=503) from exc
     except PermanentIOError as exc:
+        _log_live_failure(exc.code)
         status = 503 if exc.code == "FINAM_NOT_CONFIGURED" else 502
         raise AppException(code=exc.code, message=str(exc), status_code=status) from exc
     return StreamingResponse(
