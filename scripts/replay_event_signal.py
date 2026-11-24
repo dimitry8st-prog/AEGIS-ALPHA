@@ -42,11 +42,11 @@ def iso_utc(epoch_ms: int) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, timezone.utc).isoformat(timespec="seconds")
 
 
-def fetch_hyperliquid(symbol: str, cases: list[dict]) -> list[dict]:
+def fetch_hyperliquid(symbol: str, cases: list[dict], *, include_expiry_open: bool = False) -> list[dict]:
     candles_by_open: dict[int, dict] = {}
     for case in cases:
         start = window_start_ms(case["watch_from"])
-        end = start + WATCH_MINUTES * MINUTE_MS
+        end = start + (WATCH_MINUTES + int(include_expiry_open)) * MINUTE_MS
         if end > datetime.now(timezone.utc).timestamp() * 1000:
             raise ValueError("the historical observation window has not closed")
         body = {"type": "candleSnapshot", "req": {
@@ -66,7 +66,7 @@ def fetch_hyperliquid(symbol: str, cases: list[dict]) -> list[dict]:
     return list(candles_by_open.values())
 
 
-async def fetch_finam(symbol: str, cases: list[dict]) -> list[dict]:
+async def fetch_finam(symbol: str, cases: list[dict], *, include_expiry_open: bool = False) -> list[dict]:
     from worker.adapters.finam_adapter import FinamAdapter
     from worker.io_retry import PermanentIOError, TransientIOError
     from worker.russian_market import require_ru_symbol
@@ -82,7 +82,7 @@ async def fetch_finam(symbol: str, cases: list[dict]) -> list[dict]:
     try:
         for case in cases:
             start = datetime.fromtimestamp(window_start_ms(case["watch_from"]) / 1000, timezone.utc)
-            end = start + timedelta(minutes=WATCH_MINUTES)
+            end = start + timedelta(minutes=WATCH_MINUTES + int(include_expiry_open))
             for bar in await adapter.fetch_minutes(symbol, start, end):
                 opened = int(bar.quote_time.timestamp()) * 1000
                 row = {
@@ -163,9 +163,12 @@ def main() -> int:
     source.add_argument("--candles", type=Path, help="Local M1 snapshot JSON array")
     source.add_argument("--live", action="store_true", help="Read the historical windows from the configured provider")
     parser.add_argument("--save-candles", type=Path, help="Save the live response to a new file")
+    parser.add_argument("--include-expiry-open", action="store_true", help="Fetch one extra M1 bar for the backtest exit")
     args = parser.parse_args()
     if args.save_candles and not args.live:
         parser.error("--save-candles requires --live")
+    if args.include_expiry_open and not args.live:
+        parser.error("--include-expiry-open requires --live")
     try:
         specification = json.loads(args.events.read_text(encoding="utf-8"))
         symbol, cases = args.symbol or specification["symbol"], specification["cases"]
@@ -177,9 +180,9 @@ def main() -> int:
         if provider == "finam":
             symbol = symbol.strip().upper()
         if args.live and provider == "finam":
-            rows = asyncio.run(fetch_finam(symbol, cases))
+            rows = asyncio.run(fetch_finam(symbol, cases, include_expiry_open=args.include_expiry_open))
         elif args.live:
-            rows = fetch_hyperliquid(symbol, cases)
+            rows = fetch_hyperliquid(symbol, cases, include_expiry_open=args.include_expiry_open)
         else:
             if provider == "finam" and args.candles is None:
                 raise ValueError("Finam requires --live or a --candles snapshot")

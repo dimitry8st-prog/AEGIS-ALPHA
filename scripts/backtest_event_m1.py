@@ -1,4 +1,4 @@
-"""Simulate AEGIS event-signal execution on a frozen Hyperliquid M1 snapshot.
+"""Simulate AEGIS event-signal execution on a frozen M1 snapshot.
 
 Reuses ``scripts.replay_event_signal.replay`` for the opening-range rule and
 Backtrader for delayed next-open fills. The daily snapshot runner in
@@ -126,61 +126,59 @@ class EventBreakoutExecution(bt.Strategy):
         self.failed_orders = 0
         self.pending = None
         self.entry_attempted = False
-        self.exit_next = False
         self.exit_reason = None
-        self.missing_execution_bar = False
         self.open_mark = None
 
-    def _now(self) -> datetime:
-        return bt.num2date(self.data.datetime[0]).replace(tzinfo=timezone.utc)
+    def _bar_time(self, index: int = 0) -> datetime:
+        return bt.num2date(self.data.datetime[index], tz=timezone.utc, naive=False)
 
     def _earliest(self) -> datetime:
         return self.p.available_at + timedelta(seconds=self.p.delay_seconds)
 
-    def next(self):
-        now = self._now()
+    def next_open(self):
+        now = self._bar_time()
         if self.pending is not None:
             return
 
-        if self.exit_next and self.position:
+        if self.position and self.exit_reason is not None:
             self.pending = self.close()
             self.pending.addinfo(role="exit", bar_open=now.isoformat(), reason=self.exit_reason)
-            self.exit_next = False
+            self.exit_reason = None
             return
 
-        if not self.position and not self.entry_attempted and now >= self._earliest():
+        if not self.entry_attempted and self._earliest() <= now < self.p.window_end:
             self.entry_attempted = True
             self.pending = (
                 self.sell(size=self.p.units) if self.p.direction == "SHORT" else self.buy(size=self.p.units)
             )
             self.pending.addinfo(role="entry", bar_open=now.isoformat(), reason="delayed_signal_open")
+
+    def next(self):
+        now = self._bar_time()
+        if not self.position or now >= self.p.window_end:
             return
 
-        if self.position and not self.exit_next:
-            invalidate = (
-                self.data.close[0] >= self.p.invalidation
-                if self.p.direction == "SHORT"
-                else self.data.close[0] <= self.p.invalidation
-            )
-            # Leave one minute to take the exit on the next open when possible.
-            last_signal_bar = now + timedelta(minutes=1) >= self.p.window_end
-            if invalidate:
-                self.exit_next = True
-                self.exit_reason = "invalidation"
-            elif last_signal_bar:
-                self.exit_next = True
-                self.exit_reason = "window_end"
+        invalidate = (
+            self.data.close[0] >= self.p.invalidation
+            if self.p.direction == "SHORT"
+            else self.data.close[0] <= self.p.invalidation
+        )
+        if invalidate:
+            self.exit_reason = "invalidation"
+        elif now + timedelta(minutes=1) >= self.p.window_end:
+            self.exit_reason = "window_end"
 
     def stop(self):
-        if self.p.available_at is not None and not self.entry_attempted and self._earliest() < self.p.window_end:
-            self.missing_execution_bar = True
         if self.position:
+            # The expiry candle is eligible for its open only.
+            mark_index = -1 if self._bar_time() >= self.p.window_end else 0
             self.open_mark = {
                 "direction": self.p.direction,
                 "units": abs(float(self.position.size)),
                 "avg_price": round(float(self.position.price), 8),
-                "mark_close": round(float(self.data.close[0]), 8),
-                "bar_open": self._now().isoformat(),
+                "mark_close": round(float(self.data.close[mark_index]), 8),
+                "bar_open": self._bar_time(mark_index).isoformat(),
+                "exit_pending_reason": self.exit_reason,
                 "note": "position remains open; no exit fill invented",
             }
 
@@ -198,6 +196,7 @@ class EventBreakoutExecution(bt.Strategy):
             })
             return
         side = "buy" if order.isbuy() else "sell"
+        execution_time = bt.num2date(order.executed.dt, tz=timezone.utc, naive=False).isoformat()
         raw = float(order.executed.price)
         adjusted = adverse_price(side, raw, self.p.spread_bps, self.p.slippage_bps)
         commission = abs(adjusted * float(order.executed.size)) * (self.p.commission_bps / 10_000)
@@ -208,8 +207,8 @@ class EventBreakoutExecution(bt.Strategy):
             "units": abs(float(order.executed.size)),
             "signal_candle_close": self.p.available_at.isoformat(),
             "signal_available_at": self.p.available_at.isoformat(),
-            "execution_time": bar_open,
-            "bar_open": bar_open,
+            "execution_time": execution_time,
+            "bar_open": execution_time,
             "raw_open": round(raw, 8),
             "price_after_costs_model": round(adjusted, 8),
             "commission": round(commission, 8),
@@ -252,14 +251,15 @@ def build_report(
     commission_bps: float,
     spread_bps: float,
     slippage_bps: float,
+    currency: str = "USD",
 ) -> dict:
     assumptions = {
         "range_minutes": RANGE_MINUTES,
         "watch_minutes": WATCH_MINUTES,
-        "entry": "first minute open at or after signal_available_at + delay_seconds",
+        "entry": "first minute open at or after signal_available_at + delay_seconds, before expiry",
         "exit": (
             "next minute open after an invalidating close; "
-            "if the window ends on the signal bar, request exit on the following open when present"
+            "otherwise the open of the expiry minute when present"
         ),
         "commission_bps": commission_bps,
         "spread_bps": spread_bps,
@@ -293,7 +293,7 @@ def build_report(
     }
     if candidate is None:
         report["pnl_after_costs"] = {
-            "realized": 0.0, "currency": "USD", "note": "no breakout candidate in the watch window",
+            "realized": 0.0, "currency": currency, "note": "no breakout candidate in the watch window",
         }
         return report
 
@@ -317,15 +317,15 @@ def build_report(
 
     window_start = parse_time(signal_report["observation_start"])
     window_end = parse_time(signal_report["expires_at"])
-    feed_bars = [bar for bar in bars if window_start <= bar.opened < window_end]
+    feed_bars = [bar for bar in bars if window_start <= bar.opened <= window_end]
     earliest = available_at + timedelta(seconds=delay_seconds)
-    if not any(bar.opened >= earliest for bar in feed_bars):
+    if not any(earliest <= bar.opened < window_end for bar in feed_bars):
         report.update({
             "signal": signal,
             "status": "MISSING_EXECUTION_BAR",
             "pnl_after_costs": {
                 "realized": 0.0,
-                "currency": "USD",
+                "currency": currency,
                 "note": "no minute open available for delayed entry; no fill price invented",
             },
         })
@@ -352,7 +352,7 @@ def build_report(
     pnl = realized_pnl(strategy.fills, candidate["direction"])
     status = "FILLED" if any(
         row.get("status") == "FILLED" and row.get("role") == "entry" for row in strategy.fills
-    ) else ("MISSING_EXECUTION_BAR" if strategy.missing_execution_bar else "NO_FILL")
+    ) else "NO_FILL"
     report.update({
         "signal": signal,
         "status": status,
@@ -360,7 +360,7 @@ def build_report(
         "open_position": strategy.open_mark,
         "pnl_after_costs": {
             "realized": pnl,
-            "currency": "USD",
+            "currency": currency,
             "cash_start": cash,
             "broker_cash_end": round(engine.broker.getcash(), 8),
             "broker_equity_end": round(engine.broker.getvalue(), 8),
@@ -390,11 +390,12 @@ def run_case(
     commission_bps: float,
     spread_bps: float,
     slippage_bps: float,
+    currency: str = "USD",
 ) -> dict:
     signal_report = replay(symbol, case, rows)
     window_start = parse_time(signal_report["observation_start"])
     window_end = parse_time(signal_report["expires_at"])
-    bars = load_minute_bars(symbol, rows, window_start, window_end)
+    bars = load_minute_bars(symbol, rows, window_start, window_end + timedelta(minutes=1))
     return build_report(
         symbol=symbol,
         case=case,
@@ -409,6 +410,7 @@ def run_case(
         commission_bps=commission_bps,
         spread_bps=spread_bps,
         slippage_bps=slippage_bps,
+        currency=currency,
     )
 
 
@@ -418,6 +420,8 @@ def main() -> int:
     parser.add_argument("--candles", type=Path, default=EXAMPLE_DIR / "candles.json")
     parser.add_argument("--benchmarks", type=Path, default=DEFAULT_BENCHMARKS)
     parser.add_argument("--case-id", default="anthropic-ipo-first-print")
+    parser.add_argument("--symbol", help="Override the instrument in the event file")
+    parser.add_argument("--currency", choices=("USD", "RUB"), help="Currency of prices and starting cash")
     parser.add_argument("--delay-seconds", type=int, default=0)
     parser.add_argument("--units", type=float, default=1.0)
     parser.add_argument("--cash", type=float, default=10_000.0)
@@ -431,13 +435,20 @@ def main() -> int:
         if min(args.commission_bps, args.spread_bps, args.slippage_bps) < 0:
             raise ValueError("cost parameters must be non-negative")
         events = json.loads(args.events.read_text(encoding="utf-8"))
-        symbol, cases = events["symbol"], events["cases"]
+        symbol, cases = args.symbol or events["symbol"], events["cases"]
+        is_finam = events.get("provider") == "finam"
+        if is_finam:
+            symbol = symbol.strip().upper()
+        currency = args.currency or ("RUB" if is_finam else "USD")
         case = next(item for item in cases if item["id"] == args.case_id)
         candle_bytes = args.candles.read_bytes()
         rows = json.loads(candle_bytes.decode("utf-8"))
         dataset_id = snapshot_id(args.candles, candle_bytes)
         benchmarks = json.loads(args.benchmarks.read_text(encoding="utf-8"))["cases"]
-        matched = [row for row in benchmarks if row.get("event_case_id") == args.case_id]
+        matched = [
+            row for row in benchmarks
+            if row.get("event_case_id") == args.case_id and row.get("instrument") == symbol
+        ]
         primary = next((row for row in matched if row.get("trader") == "Sunlit Fathom"), None)
         secondary = next((row for row in matched if row.get("trader") == "Slate Brume"), None)
         report = run_case(
@@ -453,6 +464,7 @@ def main() -> int:
             commission_bps=args.commission_bps,
             spread_bps=args.spread_bps,
             slippage_bps=args.slippage_bps,
+            currency=currency,
         )
         report["secondary_benchmark"] = secondary
         print(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False))
