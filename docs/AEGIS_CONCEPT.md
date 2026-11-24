@@ -88,6 +88,7 @@
 ```bash
 python -m scripts.replay_event_signal
 python -m scripts.replay_event_signal --live
+python -m scripts.backtest_event_m1 --case-id anthropic-ipo-first-print
 ```
 
 Первый запуск читает 60 свечей из [снимка Hyperliquid](examples/anthropic-ipo/candles.json)
@@ -96,6 +97,17 @@ python -m scripts.replay_event_signal --live
 свечами, поэтому для старых интервалов нужен локальный снимок. Отчёт завершает
 прогон ошибкой при пропущенных минутах.
 [Документация Hyperliquid](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint#candle-snapshot).
+
+`backtest_event_m1` добавляет офлайн-симуляцию исполнения на том же снимке:
+отдельно фиксирует закрытие сигнальной свечи, доступность сигнала и время
+входа по первому допустимому открытию после задержки. Комиссия, спред,
+проскальзывание и правило выхода заданы явно. При отсутствии свечи для
+исполнения цена не выдумывается; открытая позиция показывается отдельно.
+Контрольный вход Sunlit Fathom — 19.11.2026 19:54:56 МСК по 111 USD; сигнал
+AEGIS доступен в 20:00:00 МСК, отставание **304 с**. Кейс Slate Brume в
+[benchmarks.json](examples/anthropic-ipo/benchmarks.json) отмечен
+`UNVERIFIED`: нет первичного исполнения с точностью до секунды. Дневной
+бэктест снимков (`scripts.backtest_snapshot`) не изменяется этим контуром.
 
 ## Поиск компаний для наблюдения за IPO
 

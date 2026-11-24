@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "id": "sunlit-fathom-anthropic-ipo-first-print",
+      "event_case_id": "anthropic-ipo-first-print",
+      "trader": "Sunlit Fathom",
+      "instrument": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "equity_context": "ANT Nasdaq IPO first print",
+      "entry_at": "2026-11-19T16:54:56+00:00",
+      "entry_at_msk": "2026-11-19T19:54:56+03:00",
+      "entry_price": "111",
+      "sources": [
+        "https://whaleradar.com/whale/sunlit-fathom-69e6",
+        "docs/AEGIS_CONCEPT.md#исторический-прогон-anthropic"
+      ],
+      "notes": [
+        "Контрольный факт этапа: первая отмеченная сделка трейдера 19.11.2026 в 19:54:56 МСК по 111 USD.",
+        "Акция ANT на Nasdaq — контекст события; xyz:ANT на Hyperliquid — инструмент реплея и симуляции."
+      ]
+    },
+    {
+      "id": "slate-brume-anthropic-short-add",
+      "event_case_id": "anthropic-ipo-first-print",
+      "trader": "Slate Brume",
+      "instrument": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "status": "UNVERIFIED",
+      "sources": [
+        "https://whaleradar.com/whale/slate-brume-d8ce",
+        "https://whaleradar.com/report/2026-11-19"
+      ],
+      "unverified": [
+        "Нет первичного исполнения с точностью до секунды внутри окна наблюдения первой сделки ANT.",
+        "Публичные отчёты описывают добавление к уже открытому шорту (агрегат за часы), а не одиночный вход вокруг IPO print."
+      ]
+    }
+  ]
+}

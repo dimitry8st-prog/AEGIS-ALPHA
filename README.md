@@ -84,9 +84,17 @@ AEGIS Alpha ищет в открытых источниках значимые �
 Рабочие группы индикаторов перечислены в [docs/AEGIS_INDICATORS.md](docs/AEGIS_INDICATORS.md).
 
 Для первого исторического прогона на минутных свечах Hyperliquid используйте
-`python -m scripts.replay_event_signal`. Метод и результаты двух эпизодов
+`python -m scripts.replay_event_signal`. Симуляция исполнения того же снимка:
+
+```bash
+pip install -r requirements-backtest.txt
+python -m scripts.backtest_event_m1 --case-id anthropic-ipo-first-print
+```
+
+Метод, отставание относительно Sunlit Fathom и статус Slate Brume
 [описаны в концепции](docs/AEGIS_CONCEPT.md#исторический-прогон-anthropic).
-Минутный прогон по GAZP и GMKN описан в [инструкции Finam](docs/finam-integration.md#прогон-сигнала-на-минутных-свечах).
+Дневной бэктест снимков: `python -m scripts.backtest_snapshot`. Минутный прогон
+по GAZP и GMKN описан в [инструкции Finam](docs/finam-integration.md#прогон-сигнала-на-минутных-свечах).
 Для оценки повторяемости нужна выборка сопоставимых событий.
 
 ### Поиск IPO
