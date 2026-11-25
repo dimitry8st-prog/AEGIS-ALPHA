@@ -93,6 +93,8 @@ python -m scripts.backtest_event_m1 --case-id anthropic-ipo-first-print
 
 Метод, отставание относительно Sunlit Fathom и статус Slate Brume
 [описаны в концепции](docs/AEGIS_CONCEPT.md#исторический-прогон-anthropic).
+Первый эпизод использует двухминутный диапазон. Исходную пятиминутную
+настройку можно воспроизвести с `--range-minutes 5`.
 Дневной бэктест снимков: `python -m scripts.backtest_snapshot`. Минутный прогон
 по GAZP и GMKN описан в [инструкции Finam](docs/finam-integration.md#прогон-сигнала-на-минутных-свечах).
 Для оценки повторяемости нужна выборка сопоставимых событий.

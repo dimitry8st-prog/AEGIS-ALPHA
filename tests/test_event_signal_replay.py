@@ -12,8 +12,11 @@ def test_saved_real_candles_replay_in_both_directions():
     short = replay(symbol, first, rows)["candidate"]
     long = replay(symbol, second, rows)["candidate"]
 
-    assert (short["direction"], short["available_at"]) == ("SHORT", "2026-11-19T17:00:00+00:00")
+    assert (short["direction"], short["available_at"]) == ("SHORT", "2026-11-19T16:52:00+00:00")
     assert (long["direction"], long["available_at"]) == ("LONG", "2026-11-20T14:47:00+00:00")
+    baseline = replay(symbol, first, rows, range_minutes=5)
+    assert baseline["range_minutes"] == 5
+    assert baseline["candidate"]["available_at"] == "2026-11-19T17:00:00+00:00"
 
     available = window_start_ms(short["available_at"])
     changed = [
@@ -26,6 +29,12 @@ def test_saved_real_candles_replay_in_both_directions():
     )
     assert replay_with_late_fact["candidate"] == short
     assert replay_with_late_fact["public_context"] == first["public_context"]
+
+
+@pytest.mark.parametrize("range_minutes", [0, WATCH_MINUTES - 1, True, "2"])
+def test_invalid_range_is_rejected(range_minutes):
+    with pytest.raises(ValueError, match="range_minutes"):
+        replay("TEST", {"id": "test", "range_minutes": range_minutes}, [])
 
 
 def test_missing_candle_blocks_replay():

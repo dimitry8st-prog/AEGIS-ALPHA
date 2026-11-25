@@ -19,7 +19,7 @@ from pathlib import Path
 
 import backtrader as bt
 
-from scripts.replay_event_signal import EXAMPLE_DIR, RANGE_MINUTES, WATCH_MINUTES, parse_time, replay
+from scripts.replay_event_signal import EXAMPLE_DIR, WATCH_MINUTES, parse_time, replay
 
 MSK = timezone(timedelta(hours=3))
 DEFAULT_BENCHMARKS = EXAMPLE_DIR / "benchmarks.json"
@@ -254,7 +254,7 @@ def build_report(
     currency: str = "USD",
 ) -> dict:
     assumptions = {
-        "range_minutes": RANGE_MINUTES,
+        "range_minutes": signal_report["range_minutes"],
         "watch_minutes": WATCH_MINUTES,
         "entry": "first minute open at or after signal_available_at + delay_seconds, before expiry",
         "exit": (
@@ -303,6 +303,7 @@ def build_report(
         "signal_candle_open": candle_open.isoformat(),
         "signal_candle_close": candle_close.isoformat(),
         "signal_available_at": available_at.isoformat(),
+        "event_to_signal_seconds": (available_at - parse_time(case["watch_from"])).total_seconds(),
         "trigger_level": candidate["trigger_level"],
         "observed_close": candidate["observed_close"],
         "invalidation_level": candidate["invalidation_level"],
@@ -391,8 +392,9 @@ def run_case(
     spread_bps: float,
     slippage_bps: float,
     currency: str = "USD",
+    range_minutes: int | None = None,
 ) -> dict:
-    signal_report = replay(symbol, case, rows)
+    signal_report = replay(symbol, case, rows, range_minutes=range_minutes)
     window_start = parse_time(signal_report["observation_start"])
     window_end = parse_time(signal_report["expires_at"])
     bars = load_minute_bars(symbol, rows, window_start, window_end + timedelta(minutes=1))
@@ -421,6 +423,7 @@ def main() -> int:
     parser.add_argument("--benchmarks", type=Path, default=DEFAULT_BENCHMARKS)
     parser.add_argument("--case-id", default="anthropic-ipo-first-print")
     parser.add_argument("--symbol", help="Override the instrument in the event file")
+    parser.add_argument("--range-minutes", type=int, help="Override the opening range in the event file")
     parser.add_argument("--currency", choices=("USD", "RUB"), help="Currency of prices and starting cash")
     parser.add_argument("--delay-seconds", type=int, default=0)
     parser.add_argument("--units", type=float, default=1.0)
@@ -465,6 +468,7 @@ def main() -> int:
             spread_bps=args.spread_bps,
             slippage_bps=args.slippage_bps,
             currency=currency,
+            range_minutes=args.range_minutes,
         )
         report["secondary_benchmark"] = secondary
         print(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False))

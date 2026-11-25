@@ -21,7 +21,7 @@ def _payload():
     return events["symbol"], case, rows, sunlit
 
 
-def _run(rows=None, case=None, delay_seconds=0, **kwargs):
+def _run(rows=None, case=None, delay_seconds=0, range_minutes=5, **kwargs):
     symbol, default_case, default_rows, sunlit = _payload()
     return run_case(
         symbol=symbol,
@@ -36,6 +36,7 @@ def _run(rows=None, case=None, delay_seconds=0, **kwargs):
         commission_bps=kwargs.get("commission_bps", 1.0),
         spread_bps=kwargs.get("spread_bps", 2.0),
         slippage_bps=kwargs.get("slippage_bps", 1.0),
+        range_minutes=range_minutes,
     )
 
 
@@ -54,6 +55,22 @@ def test_sunlit_fathom_offline_run_reports_lag_and_fill():
     assert entry["raw_open"] == 105.06
     assert entry["signal_available_at"] == "2026-11-19T17:00:00+00:00"
     assert report["dataset_id"].startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("delay", "minute", "price"),
+    [(0, "52", 106.99), (1, "53", 107.66)],
+)
+def test_anthropic_shorter_opening_range(delay, minute, price):
+    report = _run(range_minutes=None, delay_seconds=delay)
+    assert report["assumptions"]["range_minutes"] == 2
+    assert report["signal"]["direction"] == "SHORT"
+    assert report["signal"]["event_to_signal_seconds"] == 216
+    assert report["signal"]["lag_seconds_vs_benchmark"] == -176
+    assert report["signal"]["trigger_level"] == "109.35"
+    entry = report["executions"][0]
+    assert entry["execution_time"] == f"2026-11-19T16:{minute}:00+00:00"
+    assert entry["raw_open"] == price
 
 
 def test_missing_execution_bar_has_no_invented_price():
@@ -90,6 +107,7 @@ def test_absence_of_signal_is_reported():
         commission_bps=1.0,
         spread_bps=2.0,
         slippage_bps=1.0,
+        range_minutes=5,
     )
     assert report["status"] == "NO_SIGNAL"
     assert report["signal"] is None
