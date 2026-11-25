@@ -5,6 +5,7 @@
       "id": "anthropic-ipo-first-print",
       "event": "Первая сделка акциями Anthropic на Nasdaq",
       "watch_from": "2026-11-19T16:48:24Z",
+      "range_minutes": 2,
       "sources": [
         "https://www.anthropic.com/news/anthropic-prices-initial-public-offering",
         "https://perpex.co/markets/hip-3/xyz/anthropic"

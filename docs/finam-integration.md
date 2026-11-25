@@ -96,6 +96,18 @@ python -m scripts.replay_event_signal --events docs/examples/finam-m1/events.jso
 `--save-candles finam-m1.json`, использовать снимок — с
 `--candles finam-m1.json` и тем же файлом события.
 
+Для бэктеста с выходом по истечении окна запросите также свечу, которая
+открывается в момент истечения. В отчёте для провайдера `finam` суммы
+указаны в рублях.
+
+```bash
+python -m scripts.replay_event_signal --events docs/examples/finam-m1/events.json --symbol GMKN --live --include-expiry-open --save-candles gmkn-m1.json
+python -m scripts.backtest_event_m1 --events docs/examples/finam-m1/events.json --symbol GMKN --case-id gazp-m1-recent-session --candles gmkn-m1.json
+```
+
+Для GAZP укажите `--symbol GAZP` и отдельный файл свечей. Идентификатор
+события в примере обозначает одно и то же контрольное окно для обоих тикеров.
+
 Контракт M1 проверен имитацией ответа API. Получение минутных свечей с
 боевым ключом, семантика метки времени и полнота реальной выдачи требуют
 живой приёмки. Дневной сбор использует прежний сценарий.

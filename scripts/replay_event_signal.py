@@ -42,11 +42,11 @@ def iso_utc(epoch_ms: int) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, timezone.utc).isoformat(timespec="seconds")
 
 
-def fetch_hyperliquid(symbol: str, cases: list[dict]) -> list[dict]:
+def fetch_hyperliquid(symbol: str, cases: list[dict], *, include_expiry_open: bool = False) -> list[dict]:
     candles_by_open: dict[int, dict] = {}
     for case in cases:
         start = window_start_ms(case["watch_from"])
-        end = start + WATCH_MINUTES * MINUTE_MS
+        end = start + (WATCH_MINUTES + int(include_expiry_open)) * MINUTE_MS
         if end > datetime.now(timezone.utc).timestamp() * 1000:
             raise ValueError("the historical observation window has not closed")
         body = {"type": "candleSnapshot", "req": {
@@ -66,7 +66,7 @@ def fetch_hyperliquid(symbol: str, cases: list[dict]) -> list[dict]:
     return list(candles_by_open.values())
 
 
-async def fetch_finam(symbol: str, cases: list[dict]) -> list[dict]:
+async def fetch_finam(symbol: str, cases: list[dict], *, include_expiry_open: bool = False) -> list[dict]:
     from worker.adapters.finam_adapter import FinamAdapter
     from worker.io_retry import PermanentIOError, TransientIOError
     from worker.russian_market import require_ru_symbol
@@ -82,7 +82,7 @@ async def fetch_finam(symbol: str, cases: list[dict]) -> list[dict]:
     try:
         for case in cases:
             start = datetime.fromtimestamp(window_start_ms(case["watch_from"]) / 1000, timezone.utc)
-            end = start + timedelta(minutes=WATCH_MINUTES)
+            end = start + timedelta(minutes=WATCH_MINUTES + int(include_expiry_open))
             for bar in await adapter.fetch_minutes(symbol, start, end):
                 opened = int(bar.quote_time.timestamp()) * 1000
                 row = {
@@ -97,7 +97,11 @@ async def fetch_finam(symbol: str, cases: list[dict]) -> list[dict]:
     return list(candles.values())
 
 
-def replay(symbol: str, case: dict, rows: list[dict]) -> dict:
+def replay(symbol: str, case: dict, rows: list[dict], *, range_minutes: int | None = None) -> dict:
+    if range_minutes is None:
+        range_minutes = case.get("range_minutes", RANGE_MINUTES)
+    if type(range_minutes) is not int or not 1 <= range_minutes <= WATCH_MINUTES - 2:
+        raise ValueError(f"{case['id']}: range_minutes must be between 1 and {WATCH_MINUTES - 2}")
     start = window_start_ms(case["watch_from"])
     end = start + WATCH_MINUTES * MINUTE_MS
     expected = range(start, end, MINUTE_MS)
@@ -116,7 +120,7 @@ def replay(symbol: str, case: dict, rows: list[dict]) -> dict:
     if missing:
         raise ValueError(f"{case['id']}: missing {len(missing)} M1 candles, first at {missing[0]}")
 
-    opening = [bars[ts] for ts in expected[:RANGE_MINUTES]]
+    opening = [bars[ts] for ts in expected[:range_minutes]]
     ceiling = max(bar[0] for bar in opening)
     floor = min(bar[1] for bar in opening)
     baseline_volume = median(bar[3] for bar in opening)
@@ -131,12 +135,13 @@ def replay(symbol: str, case: dict, rows: list[dict]) -> dict:
         "observation_start": iso_utc(start),
         "expires_at": iso_utc(end),
         "candles_checked": len(bars),
+        "range_minutes": range_minutes,
         "range_high": str(ceiling),
         "range_low": str(floor),
         "candidate": None,
     }
     # A close at the expiry leaves no time for entry.
-    for opened in expected[RANGE_MINUTES:-1]:
+    for opened in expected[range_minutes:-1]:
         _, _, close, volume = bars[opened]
         if floor <= close <= ceiling:
             continue
@@ -159,13 +164,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--events", type=Path, default=EXAMPLE_DIR / "events.json")
     parser.add_argument("--symbol", help="Override the instrument in the event file")
+    parser.add_argument("--range-minutes", type=int, help="Override the opening range in the event file")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--candles", type=Path, help="Local M1 snapshot JSON array")
     source.add_argument("--live", action="store_true", help="Read the historical windows from the configured provider")
     parser.add_argument("--save-candles", type=Path, help="Save the live response to a new file")
+    parser.add_argument("--include-expiry-open", action="store_true", help="Fetch one extra M1 bar for the backtest exit")
     args = parser.parse_args()
     if args.save_candles and not args.live:
         parser.error("--save-candles requires --live")
+    if args.include_expiry_open and not args.live:
+        parser.error("--include-expiry-open requires --live")
     try:
         specification = json.loads(args.events.read_text(encoding="utf-8"))
         symbol, cases = args.symbol or specification["symbol"], specification["cases"]
@@ -177,15 +186,15 @@ def main() -> int:
         if provider == "finam":
             symbol = symbol.strip().upper()
         if args.live and provider == "finam":
-            rows = asyncio.run(fetch_finam(symbol, cases))
+            rows = asyncio.run(fetch_finam(symbol, cases, include_expiry_open=args.include_expiry_open))
         elif args.live:
-            rows = fetch_hyperliquid(symbol, cases)
+            rows = fetch_hyperliquid(symbol, cases, include_expiry_open=args.include_expiry_open)
         else:
             if provider == "finam" and args.candles is None:
                 raise ValueError("Finam requires --live or a --candles snapshot")
             snapshot = args.candles or EXAMPLE_DIR / "candles.json"
             rows = json.loads(snapshot.read_text(encoding="utf-8"))
-        cases_report = [replay(symbol, case, rows) for case in cases]
+        cases_report = [replay(symbol, case, rows, range_minutes=args.range_minutes) for case in cases]
         if args.save_candles:
             with args.save_candles.open("x", encoding="utf-8") as output:
                 records = ",\n".join(json.dumps(row, separators=(",", ":")) for row in rows)
@@ -193,12 +202,13 @@ def main() -> int:
     except (OSError, ValueError, KeyError, TypeError, InvalidOperation, EOFError, GetPassWarning) as exc:
         print(f"Replay failed: {exc}", file=sys.stderr)
         return 1
+    used_ranges = {case["range_minutes"] for case in cases_report}
     report = {
         "symbol": symbol,
         "provider": provider,
         "source_url": HYPERLIQUID_URL if provider == "hyperliquid" else "https://api.finam.ru",
         "input": "live" if args.live else "snapshot",
-        "range_minutes": RANGE_MINUTES,
+        "range_minutes": cases_report[0]["range_minutes"] if len(used_ranges) == 1 else None,
         "watch_minutes": WATCH_MINUTES,
         "cases": cases_report,
     }
