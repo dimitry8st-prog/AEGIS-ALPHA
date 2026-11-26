@@ -1,0 +1,670 @@
+{
+  "engine": "Backtrader 1.9.78.123",
+  "strategy": "event_opening_range_breakout_m1",
+  "manifest": "docs/examples/batch-m1/manifest.json",
+  "manifest_sha256": "sha256:a5ba5a4322797955b8807cabd4fa59a8a3030fc12b7f1d50f22797532c4f1d09",
+  "lock": {
+    "path": "docs/examples/batch-m1/manifest.lock.json",
+    "frozen_at": "2026-11-25T17:03:53+00:00"
+  },
+  "parameters": {
+    "range_minutes": [
+      2,
+      5
+    ],
+    "delay_seconds": [
+      0,
+      1
+    ],
+    "watch_minutes": 30,
+    "commission_bps": 1.0,
+    "spread_bps": 2.0,
+    "slippage_bps": 1.0,
+    "units": 1.0,
+    "cash": 10000.0,
+    "signal": "closed M1 candles only; available at the next minute open",
+    "execution": "Backtrader fill at the first M1 open at or after signal + delay",
+    "delay_0": "idealized lower bound",
+    "simulation": "M1 bars; no intrabar path"
+  },
+  "summary": {
+    "signal_rate_denominator": "cases with complete candles, including cases without a signal",
+    "pnl_note": "sums cover closed trades only; open positions keep P&L undefined",
+    "data_issues": {
+      "DATA_UNAVAILABLE": [
+        "gazp-m1-control-window",
+        "gmkn-m1-control-window",
+        "mtss-disclosure"
+      ],
+      "DATA_GAP": [],
+      "DATA_INVALID": [],
+      "NOT_PREREGISTERED": []
+    },
+    "control_checks": "PASS",
+    "variants": [
+      {
+        "range_minutes": 2,
+        "delay_seconds": 0,
+        "scenario": "idealized_lower_bound",
+        "by_role": {
+          "exploratory": {
+            "cases_with_data": 2,
+            "signals": 2,
+            "signal_rate": 1.0,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 2,
+            "closed": 0,
+            "pnl_by_currency": {}
+          },
+          "independent": {
+            "cases_with_data": 0,
+            "signals": 0,
+            "signal_rate": null,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 0,
+            "closed": 0,
+            "pnl_by_currency": {}
+          }
+        }
+      },
+      {
+        "range_minutes": 2,
+        "delay_seconds": 1,
+        "scenario": "delayed",
+        "by_role": {
+          "exploratory": {
+            "cases_with_data": 2,
+            "signals": 2,
+            "signal_rate": 1.0,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 2,
+            "closed": 0,
+            "pnl_by_currency": {}
+          },
+          "independent": {
+            "cases_with_data": 0,
+            "signals": 0,
+            "signal_rate": null,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 0,
+            "closed": 0,
+            "pnl_by_currency": {}
+          }
+        }
+      },
+      {
+        "range_minutes": 5,
+        "delay_seconds": 0,
+        "scenario": "idealized_lower_bound",
+        "by_role": {
+          "exploratory": {
+            "cases_with_data": 2,
+            "signals": 2,
+            "signal_rate": 1.0,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 2,
+            "closed": 0,
+            "pnl_by_currency": {}
+          },
+          "independent": {
+            "cases_with_data": 0,
+            "signals": 0,
+            "signal_rate": null,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 0,
+            "closed": 0,
+            "pnl_by_currency": {}
+          }
+        }
+      },
+      {
+        "range_minutes": 5,
+        "delay_seconds": 1,
+        "scenario": "delayed",
+        "by_role": {
+          "exploratory": {
+            "cases_with_data": 2,
+            "signals": 2,
+            "signal_rate": 1.0,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 2,
+            "closed": 0,
+            "pnl_by_currency": {}
+          },
+          "independent": {
+            "cases_with_data": 0,
+            "signals": 0,
+            "signal_rate": null,
+            "no_signal": 0,
+            "no_execution": 0,
+            "open_position": 0,
+            "closed": 0,
+            "pnl_by_currency": {}
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "anthropic-ipo-first-print",
+      "role": "exploratory",
+      "ticker": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "currency": "USD",
+      "event": "Первая сделка акциями Anthropic на Nasdaq",
+      "published_at": "2026-11-19T19:48:24+03:00",
+      "source_url": "https://perpex.co/markets/hip-3/xyz/anthropic",
+      "snapshot": "docs/examples/anthropic-ipo/candles.json",
+      "snapshot_sha256": "sha256:2e7d505b771848d9099dd8f5b8e30b4556561bcd877b1e57168fa9c3491153fe",
+      "status": "EVALUATED",
+      "runs": [
+        {
+          "range_minutes": 2,
+          "delay_seconds": 0,
+          "scenario": "idealized_lower_bound",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "SHORT",
+          "signal": {
+            "signal_candle_open": "2026-11-19T16:51:00+00:00",
+            "available_at": "2026-11-19T16:52:00+00:00",
+            "available_at_msk": "2026-11-19T19:52:00+03:00",
+            "event_to_signal_seconds": 216,
+            "trigger_level": "109.35",
+            "observed_close": "107.0",
+            "invalidation_level": "114.73",
+            "reason": "close below 2-minute range"
+          },
+          "entry": {
+            "side": "sell",
+            "execution_time": "2026-11-19T16:52:00+00:00",
+            "execution_time_msk": "2026-11-19T19:52:00+03:00",
+            "raw_open": 106.99,
+            "price_after_costs_model": 106.968602,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 0
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.01069686,
+            "spread": 0.010699,
+            "slippage": 0.010699,
+            "total": 0.03209486
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "SHORT",
+            "units": 1.0,
+            "avg_price": 106.99,
+            "mark_close": 95.614,
+            "bar_open": "2026-11-19T17:18:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 2,
+          "delay_seconds": 1,
+          "scenario": "delayed",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "SHORT",
+          "signal": {
+            "signal_candle_open": "2026-11-19T16:51:00+00:00",
+            "available_at": "2026-11-19T16:52:00+00:00",
+            "available_at_msk": "2026-11-19T19:52:00+03:00",
+            "event_to_signal_seconds": 216,
+            "trigger_level": "109.35",
+            "observed_close": "107.0",
+            "invalidation_level": "114.73",
+            "reason": "close below 2-minute range"
+          },
+          "entry": {
+            "side": "sell",
+            "execution_time": "2026-11-19T16:53:00+00:00",
+            "execution_time_msk": "2026-11-19T19:53:00+03:00",
+            "raw_open": 107.66,
+            "price_after_costs_model": 107.638468,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 60
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.01076385,
+            "spread": 0.010766,
+            "slippage": 0.010766,
+            "total": 0.03229585
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "SHORT",
+            "units": 1.0,
+            "avg_price": 107.66,
+            "mark_close": 95.614,
+            "bar_open": "2026-11-19T17:18:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 0,
+          "scenario": "idealized_lower_bound",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "SHORT",
+          "signal": {
+            "signal_candle_open": "2026-11-19T16:59:00+00:00",
+            "available_at": "2026-11-19T17:00:00+00:00",
+            "available_at_msk": "2026-11-19T20:00:00+03:00",
+            "event_to_signal_seconds": 696,
+            "trigger_level": "105.1",
+            "observed_close": "105.06",
+            "invalidation_level": "114.73",
+            "reason": "close below 5-minute range"
+          },
+          "entry": {
+            "side": "sell",
+            "execution_time": "2026-11-19T17:00:00+00:00",
+            "execution_time_msk": "2026-11-19T20:00:00+03:00",
+            "raw_open": 105.06,
+            "price_after_costs_model": 105.038988,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 0
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.0105039,
+            "spread": 0.010506,
+            "slippage": 0.010506,
+            "total": 0.0315159
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "SHORT",
+            "units": 1.0,
+            "avg_price": 105.06,
+            "mark_close": 95.614,
+            "bar_open": "2026-11-19T17:18:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 1,
+          "scenario": "delayed",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "SHORT",
+          "signal": {
+            "signal_candle_open": "2026-11-19T16:59:00+00:00",
+            "available_at": "2026-11-19T17:00:00+00:00",
+            "available_at_msk": "2026-11-19T20:00:00+03:00",
+            "event_to_signal_seconds": 696,
+            "trigger_level": "105.1",
+            "observed_close": "105.06",
+            "invalidation_level": "114.73",
+            "reason": "close below 5-minute range"
+          },
+          "entry": {
+            "side": "sell",
+            "execution_time": "2026-11-19T17:01:00+00:00",
+            "execution_time_msk": "2026-11-19T20:01:00+03:00",
+            "raw_open": 105.07,
+            "price_after_costs_model": 105.048986,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 60
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.0105049,
+            "spread": 0.010507,
+            "slippage": 0.010507,
+            "total": 0.0315189
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "SHORT",
+            "units": 1.0,
+            "avg_price": 105.07,
+            "mark_close": 95.614,
+            "bar_open": "2026-11-19T17:18:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        }
+      ],
+      "note": "Исследовательский эпизод: двухминутный диапазон выбран после просмотра этого окна.",
+      "control_checks": [
+        {
+          "range_minutes": 2,
+          "delay_seconds": 0,
+          "expected_signal_msk": "19:52",
+          "actual_signal_msk": "19:52",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 2,
+          "delay_seconds": 1,
+          "expected_signal_msk": "19:52",
+          "actual_signal_msk": "19:52",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 0,
+          "expected_signal_msk": "20:00",
+          "actual_signal_msk": "20:00",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 1,
+          "expected_signal_msk": "20:00",
+          "actual_signal_msk": "20:00",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "anthropic-second-session",
+      "role": "exploratory",
+      "ticker": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "currency": "USD",
+      "event": "Начало второй основной сессии Nasdaq после ночного снижения фьючерса",
+      "published_at": "2026-11-20T17:30:00+03:00",
+      "source_url": "https://listingcenter.nasdaq.com/assets/RuleBook/Nasdaq/rules/Nasdaq%20Equity%201.html",
+      "snapshot": "docs/examples/anthropic-ipo/candles.json",
+      "snapshot_sha256": "sha256:2e7d505b771848d9099dd8f5b8e30b4556561bcd877b1e57168fa9c3491153fe",
+      "status": "EVALUATED",
+      "runs": [
+        {
+          "range_minutes": 2,
+          "delay_seconds": 0,
+          "scenario": "idealized_lower_bound",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "LONG",
+          "signal": {
+            "signal_candle_open": "2026-11-20T14:46:00+00:00",
+            "available_at": "2026-11-20T14:47:00+00:00",
+            "available_at_msk": "2026-11-20T17:47:00+03:00",
+            "event_to_signal_seconds": 1020,
+            "trigger_level": "89.82",
+            "observed_close": "90.421",
+            "invalidation_level": "86.408",
+            "reason": "close above 2-minute range"
+          },
+          "entry": {
+            "side": "buy",
+            "execution_time": "2026-11-20T14:47:00+00:00",
+            "execution_time_msk": "2026-11-20T17:47:00+03:00",
+            "raw_open": 90.396,
+            "price_after_costs_model": 90.4140792,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 0
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.00904141,
+            "spread": 0.0090396,
+            "slippage": 0.0090396,
+            "total": 0.02712061
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "LONG",
+            "units": 1.0,
+            "avg_price": 90.396,
+            "mark_close": 91.873,
+            "bar_open": "2026-11-20T14:59:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 2,
+          "delay_seconds": 1,
+          "scenario": "delayed",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "LONG",
+          "signal": {
+            "signal_candle_open": "2026-11-20T14:46:00+00:00",
+            "available_at": "2026-11-20T14:47:00+00:00",
+            "available_at_msk": "2026-11-20T17:47:00+03:00",
+            "event_to_signal_seconds": 1020,
+            "trigger_level": "89.82",
+            "observed_close": "90.421",
+            "invalidation_level": "86.408",
+            "reason": "close above 2-minute range"
+          },
+          "entry": {
+            "side": "buy",
+            "execution_time": "2026-11-20T14:48:00+00:00",
+            "execution_time_msk": "2026-11-20T17:48:00+03:00",
+            "raw_open": 90.998,
+            "price_after_costs_model": 91.0161996,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 60
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.00910162,
+            "spread": 0.0090998,
+            "slippage": 0.0090998,
+            "total": 0.02730122
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "LONG",
+            "units": 1.0,
+            "avg_price": 90.998,
+            "mark_close": 91.873,
+            "bar_open": "2026-11-20T14:59:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 0,
+          "scenario": "idealized_lower_bound",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "LONG",
+          "signal": {
+            "signal_candle_open": "2026-11-20T14:46:00+00:00",
+            "available_at": "2026-11-20T14:47:00+00:00",
+            "available_at_msk": "2026-11-20T17:47:00+03:00",
+            "event_to_signal_seconds": 1020,
+            "trigger_level": "89.82",
+            "observed_close": "90.421",
+            "invalidation_level": "86.408",
+            "reason": "close above 5-minute range"
+          },
+          "entry": {
+            "side": "buy",
+            "execution_time": "2026-11-20T14:47:00+00:00",
+            "execution_time_msk": "2026-11-20T17:47:00+03:00",
+            "raw_open": 90.396,
+            "price_after_costs_model": 90.4140792,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 0
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.00904141,
+            "spread": 0.0090396,
+            "slippage": 0.0090396,
+            "total": 0.02712061
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "LONG",
+            "units": 1.0,
+            "avg_price": 90.396,
+            "mark_close": 91.873,
+            "bar_open": "2026-11-20T14:59:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 1,
+          "scenario": "delayed",
+          "simulation": "M1",
+          "outcome": "OPEN_POSITION",
+          "engine_status": "FILLED",
+          "side": "LONG",
+          "signal": {
+            "signal_candle_open": "2026-11-20T14:46:00+00:00",
+            "available_at": "2026-11-20T14:47:00+00:00",
+            "available_at_msk": "2026-11-20T17:47:00+03:00",
+            "event_to_signal_seconds": 1020,
+            "trigger_level": "89.82",
+            "observed_close": "90.421",
+            "invalidation_level": "86.408",
+            "reason": "close above 5-minute range"
+          },
+          "entry": {
+            "side": "buy",
+            "execution_time": "2026-11-20T14:48:00+00:00",
+            "execution_time_msk": "2026-11-20T17:48:00+03:00",
+            "raw_open": 90.998,
+            "price_after_costs_model": 91.0161996,
+            "reason": "delayed_signal_open",
+            "signal_to_execution_seconds": 60
+          },
+          "exit": null,
+          "costs": {
+            "commission": 0.00910162,
+            "spread": 0.0090998,
+            "slippage": 0.0090998,
+            "total": 0.02730122
+          },
+          "pnl_before_costs": null,
+          "pnl_after_costs": null,
+          "currency": "USD",
+          "open_position": {
+            "direction": "LONG",
+            "units": 1.0,
+            "avg_price": 90.998,
+            "mark_close": 91.873,
+            "bar_open": "2026-11-20T14:59:00+00:00",
+            "exit_pending_reason": "window_end",
+            "note": "position remains open; no exit fill invented"
+          }
+        }
+      ],
+      "note": "Исследовательский эпизод: окно и правило проверялись на этом снимке до пакетного прогона.",
+      "control_checks": [
+        {
+          "range_minutes": 2,
+          "delay_seconds": 0,
+          "expected_signal_msk": "17:47",
+          "actual_signal_msk": "17:47",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 2,
+          "delay_seconds": 1,
+          "expected_signal_msk": "17:47",
+          "actual_signal_msk": "17:47",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 0,
+          "expected_signal_msk": "17:47",
+          "actual_signal_msk": "17:47",
+          "status": "PASS"
+        },
+        {
+          "range_minutes": 5,
+          "delay_seconds": 1,
+          "expected_signal_msk": "17:47",
+          "actual_signal_msk": "17:47",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "id": "gazp-m1-control-window",
+      "role": "independent",
+      "ticker": "GAZP",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Контрольное окно основной сессии Мосбиржи",
+      "published_at": "2026-11-20T10:10:00+03:00",
+      "source_url": "https://api.finam.ru/docs/rest/",
+      "snapshot": null,
+      "snapshot_sha256": null,
+      "status": "DATA_UNAVAILABLE",
+      "runs": [],
+      "reason": "DATA_UNAVAILABLE: в репозитории нет архивного снимка M1 GAZP; ключ Finam в этом этапе не запрашивается."
+    },
+    {
+      "id": "gmkn-m1-control-window",
+      "role": "independent",
+      "ticker": "GMKN",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Контрольное окно основной сессии Мосбиржи",
+      "published_at": "2026-11-20T10:10:00+03:00",
+      "source_url": "https://api.finam.ru/docs/rest/",
+      "snapshot": null,
+      "snapshot_sha256": null,
+      "status": "DATA_UNAVAILABLE",
+      "runs": [],
+      "reason": "DATA_UNAVAILABLE: в репозитории нет архивного снимка M1 GMKN; ключ Finam в этом этапе не запрашивается."
+    },
+    {
+      "id": "mtss-disclosure",
+      "role": "independent",
+      "ticker": "MTSS",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Раскрытие МТС",
+      "published_at": null,
+      "source_url": "https://www.e-disclosure.ru/",
+      "snapshot": null,
+      "snapshot_sha256": null,
+      "status": "DATA_UNAVAILABLE",
+      "runs": [],
+      "reason": "DATA_UNAVAILABLE: нет снимка M1 и точного времени раскрытия."
+    }
+  ]
+}

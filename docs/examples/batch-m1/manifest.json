@@ -1,0 +1,87 @@
+{
+  "parameters": {
+    "commission_bps": 1.0,
+    "spread_bps": 2.0,
+    "slippage_bps": 1.0,
+    "units": 1.0,
+    "cash": 10000.0
+  },
+  "cases": [
+    {
+      "id": "anthropic-ipo-first-print",
+      "role": "exploratory",
+      "note": "Исследовательский эпизод: двухминутный диапазон выбран после просмотра этого окна.",
+      "ticker": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "currency": "USD",
+      "event": "Первая сделка акциями Anthropic на Nasdaq",
+      "published_at": "2026-11-19T19:48:24+03:00",
+      "source_url": "https://perpex.co/markets/hip-3/xyz/anthropic",
+      "snapshot": "docs/examples/anthropic-ipo/candles.json",
+      "expected_signal_msk": {"2": "19:52", "5": "20:00"},
+      "public_context": [
+        {
+          "available_by": "2026-11-19T00:00:00-05:00",
+          "fact": "Anthropic объявила цену IPO 83 USD 18 ноября. Точная минута публикации не задана.",
+          "source": "https://www.anthropic.com/news/anthropic-prices-initial-public-offering"
+        }
+      ]
+    },
+    {
+      "id": "anthropic-second-session",
+      "role": "exploratory",
+      "note": "Исследовательский эпизод: окно и правило проверялись на этом снимке до пакетного прогона.",
+      "ticker": "xyz:ANT",
+      "venue": "Hyperliquid",
+      "currency": "USD",
+      "event": "Начало второй основной сессии Nasdaq после ночного снижения фьючерса",
+      "published_at": "2026-11-20T17:30:00+03:00",
+      "source_url": "https://listingcenter.nasdaq.com/assets/RuleBook/Nasdaq/rules/Nasdaq%20Equity%201.html",
+      "snapshot": "docs/examples/anthropic-ipo/candles.json",
+      "expected_signal_msk": {"2": "17:47", "5": "17:47"},
+      "public_context": [
+        {
+          "available_by": "2026-11-20T06:15:00Z",
+          "fact": "CoinDesk описал фьючерс ANT в районе 90–93 USD, примерно на 5% ниже закрытия акции 97,17 USD.",
+          "source": "https://www.coindesk.com/markets/2026/11/20/crypto-traders-have-anthropic-trading-below-its-first-nasdaq-close-on-hyperliquid"
+        }
+      ]
+    },
+    {
+      "id": "gazp-m1-control-window",
+      "role": "independent",
+      "ticker": "GAZP",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Контрольное окно основной сессии Мосбиржи",
+      "published_at": "2026-11-20T10:10:00+03:00",
+      "source_url": "https://api.finam.ru/docs/rest/",
+      "snapshot": null,
+      "unavailable_reason": "DATA_UNAVAILABLE: в репозитории нет архивного снимка M1 GAZP; ключ Finam в этом этапе не запрашивается."
+    },
+    {
+      "id": "gmkn-m1-control-window",
+      "role": "independent",
+      "ticker": "GMKN",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Контрольное окно основной сессии Мосбиржи",
+      "published_at": "2026-11-20T10:10:00+03:00",
+      "source_url": "https://api.finam.ru/docs/rest/",
+      "snapshot": null,
+      "unavailable_reason": "DATA_UNAVAILABLE: в репозитории нет архивного снимка M1 GMKN; ключ Finam в этом этапе не запрашивается."
+    },
+    {
+      "id": "mtss-disclosure",
+      "role": "independent",
+      "ticker": "MTSS",
+      "venue": "MOEX",
+      "currency": "RUB",
+      "event": "Раскрытие МТС",
+      "published_at": null,
+      "source_url": "https://www.e-disclosure.ru/",
+      "snapshot": null,
+      "unavailable_reason": "DATA_UNAVAILABLE: нет снимка M1 и точного времени раскрытия."
+    }
+  ]
+}

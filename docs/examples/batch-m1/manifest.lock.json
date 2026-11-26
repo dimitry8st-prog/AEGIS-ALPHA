@@ -1,0 +1,9 @@
+{
+  "manifest": "docs/examples/batch-m1/manifest.json",
+  "frozen_at": "2026-11-25T17:03:53+00:00",
+  "independent_cases": {
+    "gazp-m1-control-window": "sha256:b198cf3ae914cf89528eb519aca310d9700fd9073184f713e1caee5de0a2b4dc",
+    "gmkn-m1-control-window": "sha256:bef46f12170c24d1f89d211e62ba22e8e455cb2efa467dc555a9f1595d1975d7",
+    "mtss-disclosure": "sha256:b0e79532e99e1b3b539959868a4c177c8602296418957d80e792cac18c193e80"
+  }
+}

@@ -1,2 +1,4 @@
 docs/examples/offline-raw-2024-01-02/quotes.csv text eol=lf
 docs/examples/offline-raw-2024-01-02/manifest.json text eol=lf
+docs/examples/anthropic-ipo/*.json text eol=lf
+docs/examples/batch-m1/*.json text eol=lf

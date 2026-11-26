@@ -99,6 +99,17 @@ python -m scripts.backtest_event_m1 --case-id anthropic-ipo-first-print
 по GAZP и GMKN описан в [инструкции Finam](docs/finam-integration.md#прогон-сигнала-на-минутных-свечах).
 Для оценки повторяемости нужна выборка сопоставимых событий.
 
+Пакетный прогон по манифесту сравнивает диапазоны 2 и 5 минут при задержке
+0 и 1 с на одних и тех же свечах:
+
+```bash
+python -m scripts.batch_event_m1 freeze --manifest docs/examples/batch-m1/manifest.json
+python -m scripts.batch_event_m1 run --manifest docs/examples/batch-m1/manifest.json --output report.json
+```
+
+Порядок работы с независимыми кейсами и формат отчёта описаны
+[в концепции](docs/AEGIS_CONCEPT.md#пакетная-проверка-пробоя-диапазона).
+
 ### Поиск IPO
 
 ```bash
