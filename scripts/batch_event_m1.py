@@ -98,7 +98,7 @@ def freeze(manifest_path: Path, now: datetime | None = None) -> dict:
             for case in manifest["cases"] if case["role"] == "independent"
         },
     }
-    with lock_path(manifest_path).open("x", encoding="utf-8") as output:
+    with lock_path(manifest_path).open("x", encoding="utf-8", newline="\n") as output:
         output.write(json.dumps(lock, indent=2, ensure_ascii=False) + "\n")
     return lock
 
@@ -371,7 +371,7 @@ def main() -> int:
             result = run_batch(args.manifest)
         text = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
         if args.command == "run" and args.output:
-            args.output.write_text(text, encoding="utf-8")
+            args.output.write_text(text, encoding="utf-8", newline="\n")
         sys.stdout.write(text)
         return 0
     except FileExistsError:

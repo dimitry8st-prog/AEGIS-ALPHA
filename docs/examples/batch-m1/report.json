@@ -2,7 +2,7 @@
   "engine": "Backtrader 1.9.78.123",
   "strategy": "event_opening_range_breakout_m1",
   "manifest": "docs/examples/batch-m1/manifest.json",
-  "manifest_sha256": "sha256:51b71b3c10175698151c665e4446e01baa3a124b62b45efb9a5128c68c6f2c32",
+  "manifest_sha256": "sha256:a5ba5a4322797955b8807cabd4fa59a8a3030fc12b7f1d50f22797532c4f1d09",
   "lock": {
     "path": "docs/examples/batch-m1/manifest.lock.json",
     "frozen_at": "2026-11-25T17:03:53+00:00"
@@ -163,7 +163,7 @@
       "published_at": "2026-11-19T19:48:24+03:00",
       "source_url": "https://perpex.co/markets/hip-3/xyz/anthropic",
       "snapshot": "docs/examples/anthropic-ipo/candles.json",
-      "snapshot_sha256": "sha256:5acbd5bc798b191645cb5d3c9b3982b52fe76d08383cf47487ba4c7a08990b2b",
+      "snapshot_sha256": "sha256:2e7d505b771848d9099dd8f5b8e30b4556561bcd877b1e57168fa9c3491153fe",
       "status": "EVALUATED",
       "runs": [
         {
@@ -397,7 +397,7 @@
       "published_at": "2026-11-20T17:30:00+03:00",
       "source_url": "https://listingcenter.nasdaq.com/assets/RuleBook/Nasdaq/rules/Nasdaq%20Equity%201.html",
       "snapshot": "docs/examples/anthropic-ipo/candles.json",
-      "snapshot_sha256": "sha256:5acbd5bc798b191645cb5d3c9b3982b52fe76d08383cf47487ba4c7a08990b2b",
+      "snapshot_sha256": "sha256:2e7d505b771848d9099dd8f5b8e30b4556561bcd877b1e57168fa9c3491153fe",
       "status": "EVALUATED",
       "runs": [
         {
