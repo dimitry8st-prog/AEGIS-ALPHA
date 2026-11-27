@@ -87,6 +87,10 @@ main { width: min(100%, 1324px); margin-inline: auto; padding: 33px 22px 40px; }
 .instrument-icon { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; font-size: 17px; font-weight: 730; }
 .gazp { background: #dcecf8; color: #1f5277; }
 .gmkn { background: #e8e1f5; color: #5c437a; }
+.sber { background: #dcf1e2; color: #1e6b3a; }
+.ydex { background: #fbe7d6; color: #8a4a17; }
+.x5 { background: #f6e0e4; color: #7c3141; }
+.imoex { background: #e6e9ee; color: #3c4756; }
 .instrument-meta { font-size: 11px; font-weight: 650; color: var(--muted); letter-spacing: .08em; }
 .segment { display: flex; gap: 3px; background: #edf2ed; border: 1px solid #e4ebe3; padding: 3px; border-radius: 9px; }
 .segment button { border: 0; border-radius: 6px; background: transparent; color: var(--muted); padding: 6px 9px; font-size: 12px; font-weight: 675; }
@@ -129,6 +133,18 @@ canvas { display: block; width: 100%; height: 298px; }
 .instrument-id strong, .instrument-value strong { font-size: 14px; font-weight: 710; }
 .instrument-id small, .instrument-value small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .instrument-value { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.instrument-value small[data-state="live"] { color: #1b8b68; }
+.instrument-value small[data-state="stale"] { color: #9a6a12; }
+.instrument-value small[data-state="error"] { color: #b03a3a; }
+.context-block { display: grid; gap: 6px; margin-bottom: 12px; }
+.context-block p { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.context-row:disabled { cursor: default; opacity: 1; }
+.news-events, .news-items { list-style: none; display: grid; gap: 8px; margin: 0 0 12px; padding: 0; }
+.news-event { font-size: 12px; font-weight: 650; padding: 7px 10px; border-radius: 8px; background: #edf2ed; }
+.news-event.watch { background: #fbf1dc; color: #7a5411; }
+.news-event.confirmed { background: #dcf1e2; color: #1e6b3a; }
+.news-items li { display: grid; gap: 3px; padding-bottom: 8px; border-bottom: 1px solid #ebefeb; font-size: 13px; }
+.news-items small { font-size: 11px; color: var(--muted); }
 .source-block { display: grid; gap: 6px; padding: 12px; border-radius: 10px; background: #eef4e8; }
 .eyebrow { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #4a6555; font-weight: 700; }
 .source-block strong { font-size: 13px; }

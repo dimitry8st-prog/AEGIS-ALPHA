@@ -47,8 +47,10 @@ async def test_finam_feed_subscribes_after_handshake_to_only_read_sources(monkey
     monkeypatch.setattr(finam_stream, "connect", lambda url, **kwargs: socket)
     async with aclosing(finam_stream.stream_finam_market("mock-broker-jwt")) as feed:
         assert await anext(feed) == {"type": "connected"}
-        assert [row["type"] for row in socket.sent] == ["QUOTES", "BARS", "BARS"]
-        assert socket.sent[0]["data"]["symbols"] == ["GAZP@MISX", "GMKN@MISX"]
+        expected = ["GAZP@MISX", "GMKN@MISX", "SBER@MISX", "YDEX@MISX", "X5@MISX", "IMOEX@MISX"]
+        assert [row["type"] for row in socket.sent] == ["QUOTES"] + ["BARS"] * len(expected)
+        assert socket.sent[0]["data"]["symbols"] == expected
+        assert [row["data"]["symbol"] for row in socket.sent[1:]] == expected
         assert all(row["data"]["timeframe"] == "TIME_FRAME_M1" for row in socket.sent[1:])
         quote, bar, warning = await anext(feed), await anext(feed), await anext(feed)
     assert quote == {

@@ -105,7 +105,7 @@ async def test_previous_moscow_day_is_ignored_once_without_expanding_the_window(
     (400, PermanentIOError, "FINAM_HTTP_ERROR"),
     (404, PermanentIOError, "FINAM_HTTP_ERROR"),
     (302, PermanentIOError, "FINAM_HTTP_ERROR"),
-    (429, TransientIOError, "FINAM_SOURCE_TRANSIENT"),
+    (429, TransientIOError, "FINAM_RATE_LIMITED"),
     (500, TransientIOError, "FINAM_SOURCE_TRANSIENT"),
     (503, TransientIOError, "FINAM_SOURCE_TRANSIENT"),
 ])

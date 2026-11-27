@@ -60,7 +60,7 @@ async def test_schedule_catches_up_and_retries_only_the_transient_window(monkeyp
     assert [call.kwargs["end"] for call in pipeline.run.await_args_list] == expected
     for call, end in zip(pipeline.run.await_args_list, expected, strict=True):
         assert call.kwargs == {
-            "symbols": ["GAZP", "GMKN"],
+            "symbols": ["GAZP", "GMKN", "SBER", "YDEX", "X5"],
             "start": end - timedelta(days=7),
             "end": end,
             "adjustment_mode": AdjustmentMode.RAW,

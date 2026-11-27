@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from worker.pipeline import MarketDataPipeline
-from worker.russian_market import RU_SESSION_TIMEZONE, RU_SYMBOLS
+from worker.russian_market import RU_SESSION_TIMEZONE, RU_WATCHLIST
 from worker.types import AdjustmentMode, RunStatus
 
 _MOSCOW = ZoneInfo(RU_SESSION_TIMEZONE)
@@ -16,7 +16,7 @@ _RUN_AT = time(8, 30)
 _LOOKBACK = timedelta(days=7)
 _RETRY_DELAY = timedelta(minutes=15)
 _MAX_ATTEMPTS = 4
-_TRANSIENT_ERRORS = {"FINAM_NETWORK_ERROR", "FINAM_SOURCE_TRANSIENT", "DB_UNAVAILABLE"}
+_TRANSIENT_ERRORS = {"FINAM_NETWORK_ERROR", "FINAM_SOURCE_TRANSIENT", "FINAM_RATE_LIMITED", "DB_UNAVAILABLE"}
 
 
 def scheduled_window_end(now: datetime) -> date:
@@ -42,7 +42,7 @@ async def run_finam_schedule(pipeline: MarketDataPipeline) -> None:
         if retry_at is not None and now >= retry_at:
             attempts += 1
             report = await pipeline.run(
-                symbols=sorted(RU_SYMBOLS),
+                symbols=list(RU_WATCHLIST),
                 start=window_end - _LOOKBACK,
                 end=window_end,
                 adjustment_mode=AdjustmentMode.RAW,

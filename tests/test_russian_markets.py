@@ -55,7 +55,8 @@ async def test_research_portfolio_requires_auth_and_has_no_invented_positions():
             app.dependency_overrides.clear()
     assert response.status_code == 200
     body = response.json()
-    assert {row["symbol"] for row in body["instruments"]} == {"GAZP", "GMKN"}
+    assert [row["symbol"] for row in body["instruments"]] == ["GAZP", "GMKN", "SBER", "YDEX", "X5"]
+    assert [row["symbol"] for row in body["market_context"]] == ["IMOEX"]
     assert body["positions_configured"] is False
     assert body["broker"]["access"] == "read_only"
     assert body["base_currency"] == "RUB"

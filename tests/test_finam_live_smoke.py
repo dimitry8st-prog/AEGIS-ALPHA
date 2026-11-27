@@ -127,7 +127,7 @@ async def _quote_total(engine) -> int:
 
 
 @pytest.mark.asyncio
-async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, tmp_path):
+async def test_mock_full_acceptance_registry_tickers(migrated_engine, database_url, tmp_path):
     await _clean(migrated_engine)
     requests: list = []
     gazp = _ok_payload("GAZP")
@@ -137,7 +137,7 @@ async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, t
         report = await smoke.run_acceptance_chain(
             adapter=adapter,
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / "finam-mock-a",
@@ -151,14 +151,15 @@ async def test_mock_full_acceptance_two_tickers(migrated_engine, database_url, t
     assert report["mode"] == "mock"
     assert report["failure_reason"] is None
     assert all(stage["ok"] for stage in report["stages"])
-    assert report["ticker_counts"] == {"GAZP": 2, "GMKN": 2}
+    assert report["ticker_counts"] == {symbol: 2 for symbol in smoke.DEFAULT_SYMBOLS}
     first = next(stage["detail"] for stage in report["stages"] if stage["name"] == "first_collect_ready")
-    assert first["counters"]["received"] == 4
+    rows = 2 * len(smoke.DEFAULT_SYMBOLS)
+    assert first["counters"]["received"] == rows
     assert first["per_symbol"]["GAZP"]["ignored_boundary_rows"] == 1
     assert report["repeat_collect"]["per_symbol"]["GAZP"]["ignored_boundary_rows"] == 1
     assert report["repeat_collect"]["counters"]["inserted"] == 0
     assert report["repeat_collect"]["counters"]["updated"] == 0
-    assert report["repeat_collect"]["counters"]["duplicates"] == 4
+    assert report["repeat_collect"]["counters"]["duplicates"] == rows
     assert report["csv_manifest_checks"]["first"]["ok"] is True
     assert report["csv_manifest_checks"]["first"]["coverage_status"] == "UNKNOWN"
     assert report["csv_manifest_checks"]["first"]["calendar_completeness_proven"] is False
@@ -276,7 +277,7 @@ async def test_cli_live_without_explicit_database_url(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     "kwargs,reason_part",
     [
-        ({"empty_symbols": {"GAZP", "GMKN"}}, "PARTIAL"),
+        ({"empty_symbols": set(smoke.DEFAULT_SYMBOLS)}, "PARTIAL"),
         ({"empty_symbols": {"GMKN"}}, "PARTIAL"),
         ({"omit_symbols": {"GMKN"}}, "PARTIAL"),
     ],
@@ -289,7 +290,7 @@ async def test_partial_empty_or_missing_ticker_fails_acceptance(
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / f"fail-{reason_part.lower()}",
@@ -326,7 +327,7 @@ async def test_auth_rate_limit_and_timeout_fail_without_leaking_secrets(
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / f"err-{code_fragment}",
@@ -354,7 +355,7 @@ async def test_repeat_collect_creates_neither_quotes_nor_revisions(
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / "idempotent",
@@ -372,7 +373,7 @@ async def test_repeat_collect_creates_neither_quotes_nor_revisions(
     assert stage["detail"]["counters"]["updated"] == 0
     assert stage["detail"]["counters"]["duplicates"] == stage["detail"]["counters"]["received"]
     assert stage["detail"]["revisions_after_repeat"] == stage["detail"]["revisions_before_repeat"]
-    assert await _quote_total(migrated_engine) == 4
+    assert await _quote_total(migrated_engine) == 2 * len(smoke.DEFAULT_SYMBOLS)
 
 
 @pytest.mark.asyncio
@@ -397,7 +398,7 @@ async def test_repeat_rejects_missing_source_bar(migrated_engine, database_url, 
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=output_dir,
@@ -405,8 +406,8 @@ async def test_repeat_rejects_missing_source_bar(migrated_engine, database_url, 
             settings=_settings(database_url),
         )
 
-    assert report["repeat_collect"]["counters"]["duplicates"] == 3
-    assert report["ticker_counts"] == {"GAZP": 2, "GMKN": 2}
+    assert report["repeat_collect"]["counters"]["duplicates"] == 2 * len(smoke.DEFAULT_SYMBOLS) - 1
+    assert report["ticker_counts"] == {symbol: 2 for symbol in smoke.DEFAULT_SYMBOLS}
     assert report["failure_reason"] == "REPEAT_SOURCE_BARS_CHANGED"
     assert smoke.acceptance_exit_code(report) != 0
     assert not output_dir.exists()
@@ -419,7 +420,7 @@ async def test_csv_manifest_mismatch_is_detected(migrated_engine, database_url, 
         await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / "hash-base",
@@ -446,7 +447,7 @@ async def test_export_to_existing_directory_preserves_contents(
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=out,
@@ -495,7 +496,7 @@ async def test_successful_mock_never_sets_live_verified(migrated_engine, databas
         report = await smoke.run_acceptance_chain(
             adapter=FinamAdapter(SECRET, client=client),
             engine=migrated_engine,
-            symbols=["GAZP", "GMKN"],
+            symbols=list(smoke.DEFAULT_SYMBOLS),
             start=START,
             end=END,
             output_dir=tmp_path / "no-live-label",

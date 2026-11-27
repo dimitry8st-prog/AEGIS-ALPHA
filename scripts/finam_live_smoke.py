@@ -44,9 +44,10 @@ from worker.config import WorkerSettings
 from worker.export import CSV_NAME, MANIFEST_NAME, ExportError, export_quotes
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
+from worker.russian_market import RU_WATCHLIST
 from worker.types import AdjustmentMode, FetchResult, QuoteBar, RunReport, RunStatus
 
-DEFAULT_SYMBOLS = ("GAZP", "GMKN")
+DEFAULT_SYMBOLS = RU_WATCHLIST
 PROVIDER = "finam"
 ADJUSTMENT = "raw"
 
@@ -292,7 +293,7 @@ def verify_export_artifacts(output_dir: Path) -> dict[str, Any]:
         "row_count_match": row_count == manifest.get("row_count"),
         "provider": selection.get("provider") == PROVIDER,
         "adjustment_mode": selection.get("adjustment_mode") == ADJUSTMENT,
-        "symbols_both": set(DEFAULT_SYMBOLS).issubset(symbols_in_csv),
+        "symbols_all": set(DEFAULT_SYMBOLS).issubset(symbols_in_csv),
         "dataset_id": manifest.get("dataset_id") == f"sha256:{digest}",
         "coverage_status_unknown": manifest.get("coverage_status") == "UNKNOWN",
     }
@@ -664,7 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--symbols",
         default=",".join(DEFAULT_SYMBOLS),
-        help="Must be GAZP,GMKN",
+        help="Must match the registry: " + ",".join(DEFAULT_SYMBOLS),
     )
     return parser
 

@@ -14,6 +14,7 @@ const STAGE_BY_CODE = Object.freeze({
   FINAM_STREAM_UNAVAILABLE: LIVE_STAGES.connection,
   FINAM_NETWORK_ERROR: LIVE_STAGES.connection,
   FINAM_SOURCE_TRANSIENT: LIVE_STAGES.connection,
+  FINAM_RATE_LIMITED: LIVE_STAGES.connection,
   FINAM_STREAM_REJECTED: LIVE_STAGES.subscription,
   FINAM_STREAM_INVALID_DATA: LIVE_STAGES.data,
   FINAM_INVALID_M1_BAR: LIVE_STAGES.data,
@@ -101,3 +102,62 @@ export function latestLiveQuote(quote, bars) {
   if (quote && (!candleTime || Date.parse(quote.quote_time) >= Date.parse(candleTime))) return quote;
   return null;
 }
+
+/** Per-ticker state: one rejected subscription or failed history never hides the others. */
+export function symbolStatus({ symbolError, history, streamConnected, streamError, streamSeen, barCount = 0 } = {}) {
+  if (symbolError) return { state: "error", label: "Ошибка подписки" };
+  if (history?.loading && !barCount) return { state: "waiting", label: "Загрузка" };
+  if (history?.errorLabel && !barCount && !streamSeen) return { state: "error", label: "Нет данных" };
+  if (streamConnected && streamSeen) return { state: "live", label: "Поток" };
+  if (streamError && (barCount || streamSeen)) return { state: "stale", label: "Устарело" };
+  if (streamConnected) return { state: "waiting", label: "Ждём поток" };
+  if (barCount) return { state: "history", label: "История M1" };
+  return { state: "waiting", label: "Ожидание" };
+}
+
+export function closedMinuteBars(bars = [], nowMs = Date.now()) {
+  return bars.filter(bar => Date.parse(bar.quote_time) + 60_000 <= nowMs);
+}
+
+/** Stock vs index change over the same closed minutes only; null without two common points. */
+export function alignedChange(stockBars = [], indexBars = [], nowMs = Date.now(), maxPoints = 31) {
+  const index = new Map(closedMinuteBars(indexBars, nowMs).map(bar => [Date.parse(bar.quote_time), bar]));
+  const common = closedMinuteBars(stockBars, nowMs)
+    .filter(bar => index.has(Date.parse(bar.quote_time)))
+    .slice(-maxPoints);
+  if (common.length < 2) return null;
+  const first = common[0];
+  const last = common.at(-1);
+  const change = (from, to) => Number(to.close) / Number(from.close) - 1;
+  return {
+    start: first.quote_time,
+    end: last.quote_time,
+    points: common.length,
+    stock: change(first, last),
+    index: change(index.get(Date.parse(first.quote_time)), index.get(Date.parse(last.quote_time))),
+  };
+}
+
+const NEWS_FEED_LABELS = Object.freeze({
+  OK: "Новости: лента доступна",
+  NOT_CONFIGURED: "Новости: ключ Финама не настроен",
+  NO_ACCESS: "Новости: нет доступа к ленте",
+  RATE_LIMITED: "Новости: лимит запросов, повтор позже",
+  UNAVAILABLE: "Новости: лента временно недоступна",
+});
+
+export function newsFeedText(feed) {
+  if (!feed) return "Новости: загрузка…";
+  const label = NEWS_FEED_LABELS[feed.status] || NEWS_FEED_LABELS.UNAVAILABLE;
+  return feed.status === "OK" && feed.truncated ? label + " · показана часть истории" : label;
+}
+
+export const EVENT_LABELS = Object.freeze({
+  DIVIDEND_RECOMMENDATION: "Рекомендация дивидендов",
+  SHAREHOLDER_DECISION: "Решение акционеров",
+  RECORD_DATE: "Дата отсечки",
+  COMPANY_NEWS: "Новость компании",
+  WATCH: "Наблюдение",
+  CONFIRMED: "Подтверждено",
+  NO_SIGNAL: "Нет сигнала",
+});
