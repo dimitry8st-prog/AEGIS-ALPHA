@@ -7,6 +7,8 @@ stored 23:59:59 label identifies that day; it is not the exchange close.
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import math
@@ -29,6 +31,12 @@ MAX_WINDOW_DAYS = 365
 MAX_CHUNKS = 12
 _MOSCOW = ZoneInfo(RU_SESSION_TIMEZONE)
 _BAR_FIELDS = ("timestamp", "open", "high", "low", "close", "volume", "is_data_snapshot")
+
+
+@dataclass(frozen=True)
+class MinuteHistory:
+    bars: list[QuoteBar]
+    rejected: dict[str, int]
 
 
 class FinamAdapter(MarketDataAdapter):
@@ -135,7 +143,16 @@ class FinamAdapter(MarketDataAdapter):
         )
 
     async def fetch_minutes(self, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
-        """Read one closed, minute-aligned window without writing to storage."""
+        """Read a strict research window. Any rejected row invalidates it."""
+        history = await self.fetch_minute_history(symbol, start, end)
+        if history.rejected:
+            raise PermanentIOError(
+                "FINAM_INVALID_M1_BAR", "Finam returned an invalid, duplicate or out-of-window minute"
+            )
+        return history.bars
+
+    async def fetch_minute_history(self, symbol: str, start: datetime, end: datetime) -> MinuteHistory:
+        """Return validated bars and safe rejection counts for the dashboard."""
         if not self._api_token or not self._api_token.strip():
             raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
         try:
@@ -153,15 +170,25 @@ class FinamAdapter(MarketDataAdapter):
         async with httpx.AsyncClient(follow_redirects=False) as client:
             return await self._fetch_minutes(client, symbol, start, end)
 
-    async def _fetch_minutes(self, client, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
+    async def _fetch_minutes(self, client, symbol: str, start: datetime, end: datetime) -> MinuteHistory:
         jwt = await self._open_session(client)
         rows = await self._read_bars(client, symbol, jwt, "TIME_FRAME_M1", start.isoformat(), end.isoformat())
         received: dict[datetime, QuoteBar] = {}
-        try:
-            for row in rows:
+        conflicted: set[datetime] = set()
+        rejected: Counter[str] = Counter()
+        for row in rows:
+            try:
                 stamp = _timestamp(row["timestamp"]).astimezone(timezone.utc)
-                if stamp.second or stamp.microsecond or not start <= stamp < end or stamp in received:
-                    raise ValueError("unexpected M1 timestamp")
+            except (ValueError, TypeError, KeyError, OverflowError):
+                rejected["timestamp"] += 1
+                continue
+            if stamp.second or stamp.microsecond:
+                rejected["timestamp"] += 1
+                continue
+            if not start <= stamp < end:
+                rejected["outside_window"] += 1
+                continue
+            try:
                 open_, high, low, close, volume = map(
                     _decimal, (row[key] for key in ("open", "high", "low", "close", "volume"))
                 )
@@ -170,17 +197,26 @@ class FinamAdapter(MarketDataAdapter):
                     and volume >= 0 and volume == volume.to_integral_value()
                 ):
                     raise ValueError("invalid M1 price or volume")
-                received[stamp] = QuoteBar(
+                bar = QuoteBar(
                     provider=self.provider_name, symbol=symbol, exchange=RU_EXCHANGE,
                     interval="1m", quote_time=stamp, open=open_, high=high, low=low,
                     close=close, volume=int(volume), adjustment_mode=AdjustmentMode.RAW,
                     session_timezone=RU_SESSION_TIMEZONE, currency=RU_CURRENCY,
                 )
-        except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
-            raise PermanentIOError(
-                "FINAM_INVALID_M1_BAR", "Finam returned an invalid, duplicate or out-of-window minute"
-            ) from None
-        return [received[stamp] for stamp in sorted(received)]
+            except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
+                rejected["ohlcv"] += 1
+                continue
+            if stamp in conflicted:
+                rejected["conflict"] += 1
+            elif stamp not in received:
+                received[stamp] = bar
+            elif received[stamp].ohlcv_tuple() == bar.ohlcv_tuple():
+                rejected["duplicate"] += 1
+            else:
+                del received[stamp]
+                conflicted.add(stamp)
+                rejected["conflict"] += 2
+        return MinuteHistory([received[stamp] for stamp in sorted(received)], dict(rejected))
 
     async def open_market_session(self) -> str:
         """Create a session for read-only live market subscriptions."""

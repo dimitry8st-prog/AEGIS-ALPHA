@@ -85,8 +85,9 @@ class FinamMinutes(BaseModel):
     symbol: str
     start: datetime
     end: datetime
-    status: Literal["READY", "PARTIAL", "EMPTY"]
+    status: Literal["READY", "PARTIAL", "EMPTY", "INVALID"]
     expected_minutes: int
+    rejected: dict[str, int] = Field(default_factory=dict)
     items: list[FinamMinute]
 
 

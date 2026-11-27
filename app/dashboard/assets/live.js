@@ -65,16 +65,27 @@ export function mergeMinuteBars(prior = [], rows = [], preferExisting = false) {
     .slice(-120);
 }
 
-export function historyStatusText({ loading, errorLabel, barCount }) {
+const rejectionLabels = {
+  outside_window: "за пределами окна", timestamp: "метка времени", ohlcv: "цены или объём",
+  duplicate: "повтор", conflict: "расхождение за одну минуту",
+};
+
+export function historyStatusText({ loading, errorLabel, barCount, status, rejected } = {}) {
   if (loading) return "История M1: загрузка…";
   if (errorLabel) return errorLabel;
+  const reasons = Object.entries(rejectionLabels).filter(([key]) => rejected?.[key] > 0)
+    .map(([key, label]) => `${label} — ${rejected[key]}`);
+  const details = reasons.length ? ` (${reasons.join(", ")})` : "";
+  if (status === "INVALID") return `История M1: все строки отклонены${details}`;
+  if (status === "PARTIAL" && barCount > 0) return `История M1: загружена частично${details}`;
   if (barCount > 0) return "История M1: загружена";
   return "История M1: в окне нет свечей";
 }
 
-export function streamStatusText({ connecting, connected, waiting, errorLabel }) {
+export function streamStatusText({ connecting, connected, waiting, errorLabel, hasRejectedData }) {
   if (errorLabel) return errorLabel;
   if (connecting) return "Поток: подключение…";
+  if (connected && hasRejectedData) return "Поток: подключён · пропущены некорректные данные";
   if (connected && waiting) return "Поток: подключён · ждём рыночные данные";
   if (connected) return "Поток: подключён";
   return "Поток: ожидание";
@@ -83,4 +94,10 @@ export function streamStatusText({ connecting, connected, waiting, errorLabel })
 export function lastCandleTime(bars = []) {
   const last = bars.at(-1);
   return last?.quote_time || null;
+}
+
+export function latestLiveQuote(quote, bars) {
+  const candleTime = lastCandleTime(bars);
+  if (quote && (!candleTime || Date.parse(quote.quote_time) >= Date.parse(candleTime))) return quote;
+  return null;
 }
