@@ -1,0 +1,27 @@
+{
+  "id": "nvda-ceo-return-2026-11",
+  "symbol": "NVDA",
+  "event_type": "CEO_REINSTATEMENT",
+  "expires_at": "2026-11-23T09:30:00-05:00",
+  "evidence": [
+    {
+      "kind": "public_support",
+      "published_at": "2026-11-20T13:31:00-05:00",
+      "source": {
+        "kind": "editorial",
+        "publisher": "CBS News",
+        "url": "https://www.cbsnews.com/live-updates/trump-press-conference-live-stream-2026-11-20/#post-update-bda23900"
+      }
+    },
+    {
+      "kind": "reinstatement",
+      "occurred_date": "2026-11-22",
+      "published_at": "2026-11-23T08:55:00-05:00",
+      "source": {
+        "kind": "issuer",
+        "publisher": "NVIDIA via GlobeNewswire",
+        "url": "https://www.globenewswire.com/news-release/2026/11/23/3408381/0/en/nvidia-board-reinstates-jensen-huang-as-president-ceo-and-board-director.html"
+      }
+    }
+  ]
+}
