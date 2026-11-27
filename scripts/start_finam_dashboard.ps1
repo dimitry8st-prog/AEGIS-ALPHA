@@ -94,7 +94,8 @@ function Invoke-FinamCollection([securestring] $Key, [int] $LookbackDays, [switc
         $endDay = [DateTime]::UtcNow.AddHours(3).Date
         $start = $endDay.AddDays(-$LookbackDays).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
         $end = $endDay.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
-        $reportJson = & $python -m worker collect --provider finam --symbols 'GAZP,GMKN' --adjustment raw --start $start --end $end
+        # Without --symbols the worker reads the server registry (config/portfolios/russian-research.json).
+        $reportJson = & $python -m worker collect --provider finam --adjustment raw --start $start --end $end
         $collectExit = $LASTEXITCODE
     } finally {
         [Environment]::SetEnvironmentVariable('FINAM_API_TOKEN', $null, 'Process')

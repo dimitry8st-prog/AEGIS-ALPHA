@@ -11,10 +11,10 @@ from websockets import connect
 from websockets.exceptions import WebSocketException
 
 from worker.io_retry import PermanentIOError, TransientIOError
-from worker.russian_market import RU_EXCHANGE, RU_SYMBOLS
+from worker.russian_market import RU_CONTEXT_SYMBOLS, RU_WATCHLIST, finam_symbol
 
 FINAM_WS_URL = "wss://api.finam.ru/ws"
-INSTRUMENTS = {f"{symbol}@{RU_EXCHANGE}": symbol for symbol in sorted(RU_SYMBOLS)}
+INSTRUMENTS = {finam_symbol(symbol): symbol for symbol in (*RU_WATCHLIST, *RU_CONTEXT_SYMBOLS)}
 
 
 def _stamp(value: str) -> datetime:
@@ -35,43 +35,69 @@ def _number(value: str) -> Decimal:
     return result
 
 
+def _quote_event(row: dict) -> dict | None:
+    symbol = INSTRUMENTS.get(row.get("symbol"))
+    # Some updates carry only bid and ask.
+    if not symbol or not row.get("last"):
+        return None
+    last = _number(row["last"])
+    if last <= 0:
+        return None
+    return {
+        "type": "quote", "symbol": symbol, "last": str(last),
+        "quote_time": _stamp(row["timestamp"]).isoformat(),
+    }
+
+
+def _bar_event(row: dict, symbol: str) -> dict:
+    stamp = _stamp(row["timestamp"])
+    opening, high, low, close, volume = (
+        _number(row[field]) for field in ("open", "high", "low", "close", "volume")
+    )
+    if stamp.second or stamp.microsecond or not (
+        0 < low <= min(opening, close) <= max(opening, close) <= high
+        and volume >= 0 and volume == volume.to_integral_value()
+    ):
+        raise ValueError("invalid minute bar")
+    return {
+        "type": "bar", "symbol": symbol, "quote_time": stamp.isoformat(),
+        "open": str(opening), "high": str(high), "low": str(low), "close": str(close),
+        "volume": int(volume),
+    }
+
+
 def _market_events(message: dict) -> list[dict]:
     if message.get("type") != "DATA":
         return []
     payload = message["payload"]
+    kind = message.get("subscription_type")
+    symbol = INSTRUMENTS.get(payload.get("symbol"))
     if (payload.get("error") or {}).get("code"):
-        raise TransientIOError("FINAM_STREAM_REJECTED", "Finam rejected a market data subscription")
-    events = []
-    if message.get("subscription_type") == "QUOTES":
-        for quote in payload.get("quote") or []:
-            symbol = INSTRUMENTS.get(quote.get("symbol"))
-            # Some quote updates carry only bid/ask; retain the last known trade price.
-            if not symbol or not quote.get("last"):
-                continue
-            last = _number(quote["last"])
-            if last > 0:
-                events.append({
-                    "type": "quote", "symbol": symbol, "last": str(last),
-                    "quote_time": _stamp(quote["timestamp"]).isoformat(),
-                })
-    if message.get("subscription_type") == "BARS":
-        symbol = INSTRUMENTS.get(payload.get("symbol"))
         if symbol:
-            for row in payload.get("bars") or []:
-                stamp = _stamp(row["timestamp"])
-                opening, high, low, close, volume = (
-                    _number(row[field]) for field in ("open", "high", "low", "close", "volume")
-                )
-                if stamp.second or stamp.microsecond or not (
-                    0 < low <= min(opening, close) <= max(opening, close) <= high
-                    and volume >= 0 and volume == volume.to_integral_value()
-                ):
-                    raise ValueError("invalid minute bar")
-                events.append({
-                    "type": "bar", "symbol": symbol, "quote_time": stamp.isoformat(),
-                    "open": str(opening), "high": str(high), "low": str(low), "close": str(close),
-                    "volume": int(volume),
-                })
+            # One rejected instrument must not stop the other subscriptions.
+            return [{"type": "symbol_error", "symbol": symbol, "feed": kind, "code": "FINAM_STREAM_REJECTED"}]
+        raise TransientIOError("FINAM_STREAM_REJECTED", "Finam rejected a market data subscription")
+    if kind == "QUOTES":
+        rows = payload.get("quote") or []
+    elif kind == "BARS" and symbol:
+        rows = payload.get("bars") or []
+    else:
+        return []
+    if not isinstance(rows, list):
+        return [{"type": "data_warning", "feed": kind, "rejected": 1}]
+
+    events = []
+    rejected = 0
+    for row in rows:
+        try:
+            event = _quote_event(row) if kind == "QUOTES" else _bar_event(row, symbol)
+        except (ValueError, TypeError, KeyError, AttributeError, InvalidOperation, OverflowError):
+            rejected += 1
+            continue
+        if event is not None:
+            events.append(event)
+    if rejected:
+        events.append({"type": "data_warning", "feed": kind, "rejected": rejected})
     return events
 
 
@@ -88,7 +114,7 @@ def _decode(raw: str | bytes) -> dict:
 
 
 async def stream_finam_market(jwt: str):
-    """One upstream connection carries quotes and M1 bars for both instruments."""
+    """One upstream connection carries quotes and M1 bars for every registry instrument."""
     try:
         async with connect(FINAM_WS_URL, open_timeout=8, close_timeout=2, max_size=1_000_000) as socket:
             handshake = _decode(await asyncio.wait_for(socket.recv(), timeout=8))

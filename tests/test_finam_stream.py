@@ -23,6 +23,8 @@ async def test_finam_feed_subscribes_after_handshake_to_only_read_sources(monkey
                 ]}},
                 {"type": "DATA", "subscription_type": "BARS", "payload": {
                     "symbol": "GAZP@MISX", "bars": [{
+                        "timestamp": "2026-11-20T07:10:02Z",
+                    }, {
                         "timestamp": "2026-11-20T07:10:00Z", "open": "105.11", "high": "106",
                         "low": "104", "close": "105.22", "volume": "1000",
                     }],
@@ -45,14 +47,17 @@ async def test_finam_feed_subscribes_after_handshake_to_only_read_sources(monkey
     monkeypatch.setattr(finam_stream, "connect", lambda url, **kwargs: socket)
     async with aclosing(finam_stream.stream_finam_market("mock-broker-jwt")) as feed:
         assert await anext(feed) == {"type": "connected"}
-        assert [row["type"] for row in socket.sent] == ["QUOTES", "BARS", "BARS"]
-        assert socket.sent[0]["data"]["symbols"] == ["GAZP@MISX", "GMKN@MISX"]
+        expected = ["GAZP@MISX", "GMKN@MISX", "SBER@MISX", "YDEX@MISX", "X5@MISX", "IMOEX@MISX"]
+        assert [row["type"] for row in socket.sent] == ["QUOTES"] + ["BARS"] * len(expected)
+        assert socket.sent[0]["data"]["symbols"] == expected
+        assert [row["data"]["symbol"] for row in socket.sent[1:]] == expected
         assert all(row["data"]["timeframe"] == "TIME_FRAME_M1" for row in socket.sent[1:])
-        quote, bar = await anext(feed), await anext(feed)
+        quote, bar, warning = await anext(feed), await anext(feed), await anext(feed)
     assert quote == {
         "type": "quote", "symbol": "GMKN", "last": "107.21", "quote_time": "2026-11-20T07:10:02+00:00",
     }
     assert (bar["symbol"], bar["close"], bar["volume"]) == ("GAZP", "105.22", 1000)
+    assert warning == {"type": "data_warning", "feed": "BARS", "rejected": 1}
 
 
 @pytest.mark.asyncio

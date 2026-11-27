@@ -39,9 +39,10 @@ class PermanentIOError(Exception):
 class TransientIOError(Exception):
     """Raised for retryable source/DB failures (timeouts, rate limits, etc.)."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, retry_after: float | None = None):
         self.code = code
         self.message = message
+        self.retry_after = retry_after
         super().__init__(message)
 
 
@@ -82,8 +83,10 @@ async def with_retries(
             if not is_transient(exc):
                 raise
             remaining_after = deadline_monotonic - time.monotonic()
-            if attempt >= max_attempts or remaining_after <= wait_seconds:
+            # A source-provided Retry-After is a lower bound for the next attempt.
+            wait = max(wait_seconds, getattr(exc, "retry_after", None) or 0.0)
+            if attempt >= max_attempts or remaining_after <= wait:
                 raise
-            await asyncio.sleep(min(wait_seconds, max(0.0, remaining_after)))
+            await asyncio.sleep(min(wait, max(0.0, remaining_after)))
     assert last_exc is not None
     raise last_exc

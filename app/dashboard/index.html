@@ -18,6 +18,7 @@
     <nav aria-label="Разделы дашборда">
       <a href="#overview"><span aria-hidden="true">▦</span>Обзор</a>
       <a href="#quotes"><span aria-hidden="true">⏐╵</span>Котировки</a>
+      <a href="#news"><span aria-hidden="true">✎</span>Новости</a>
       <a href="#runs"><span aria-hidden="true">≡</span>Сбор данных</a>
     </nav>
     <div class="sidebar-bottom">
@@ -69,10 +70,10 @@
           <article class="panel quote-panel" id="quotes">
             <header class="quote-header">
               <div class="instrument-heading">
-                <div id="instrument-icon" class="instrument-icon gazp" aria-hidden="true">Г</div>
+                <div id="instrument-icon" class="instrument-icon" aria-hidden="true"></div>
                 <div>
-                  <h2 id="instrument-name">Газпром</h2>
-                  <span id="instrument-symbol" class="instrument-meta">GAZP · MISX · 1D</span>
+                  <h2 id="instrument-name">—</h2>
+                  <span id="instrument-symbol" class="instrument-meta">MISX · 1D</span>
                 </div>
               </div>
               <div id="period" class="segment" role="group" aria-label="Период графика">
@@ -89,6 +90,7 @@
             <div id="live-status" class="live-status" hidden>
               <p id="live-history-state" class="series-period" role="status"></p>
               <p id="live-stream-state" class="series-period" role="status"></p>
+              <p id="live-index-compare" class="series-period"></p>
             </div>
             <p id="series-period" class="series-period">Сохранённые дневные свечи · МСК</p>
             <div class="chart-shell">
@@ -118,17 +120,11 @@
               <h2>Инструменты</h2>
               <p>Исследовательский список</p>
             </header>
-            <div id="instruments" class="instruments" role="group" aria-label="Выбор инструмента">
-              <button type="button" class="instrument-row" data-symbol="GAZP" aria-pressed="true">
-                <span class="instrument-icon gazp" aria-hidden="true">Г</span>
-                <span class="instrument-id"><strong>GAZP</strong><small>Газпром</small></span>
-                <span class="instrument-value"><strong id="price-GAZP">—</strong><small id="change-GAZP">—</small></span>
-              </button>
-              <button type="button" class="instrument-row" data-symbol="GMKN" aria-pressed="false">
-                <span class="instrument-icon gmkn" aria-hidden="true">Н</span>
-                <span class="instrument-id"><strong>GMKN</strong><small>Норникель</small></span>
-                <span class="instrument-value"><strong id="price-GMKN">—</strong><small id="change-GMKN">—</small></span>
-              </button>
+            <div id="instruments" class="instruments" role="group" aria-label="Выбор инструмента"></div>
+            <div id="market-context" class="context-block" hidden>
+              <span class="eyebrow">Индикатор рынка</span>
+              <div id="context-rows"></div>
+              <p id="context-note"></p>
             </div>
             <div class="source-block">
               <span class="eyebrow">Источник</span>
@@ -136,6 +132,16 @@
               <p id="chart-source-note">Цены без поправок на дивиденды и дробления. Полнота по торговому календарю не проверялась.</p>
             </div>
           </aside>
+        </section>
+
+        <section class="panel runs-panel news-panel" id="news" aria-labelledby="news-title">
+          <div class="runs-heading">
+            <div><h2 id="news-title">Новости Финама</h2><p id="news-scope">Лента по бумагам исследовательского списка · МСК</p></div>
+            <span class="run-count" id="news-feed" role="status">Новости: загрузка…</span>
+          </div>
+          <ul id="news-events" class="news-events" aria-label="События по бумагам"></ul>
+          <ol id="news-items" class="news-items"></ol>
+          <p id="news-empty" class="empty-state runs-empty">Загрузка новостей…</p>
         </section>
 
         <section class="panel runs-panel" id="runs" aria-labelledby="runs-title">

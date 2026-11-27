@@ -7,10 +7,15 @@ stored 23:59:59 label identifies that day; it is not the exchange close.
 
 from __future__ import annotations
 
+import asyncio
+from collections import Counter, deque
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 import math
-from typing import Any
+import time as monotonic_time
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -18,8 +23,8 @@ import httpx
 from worker.adapters.base import MarketDataAdapter
 from worker.io_retry import PermanentIOError, TransientIOError
 from worker.russian_market import (
-    RU_CURRENCY, RU_EXCHANGE, RU_SESSION_TIMEZONE,
-    require_ru_symbol, russian_quote_time,
+    RU_CURRENCY, RU_EXCHANGE, RU_SESSION_TIMEZONE, RU_WATCHLIST,
+    finam_symbol, require_ru_symbol, ru_instrument, russian_quote_time,
 )
 from worker.types import AdjustmentMode, FetchResult, FetchStatus, QuarantineRow, QuoteBar
 
@@ -27,8 +32,82 @@ FINAM_BASE_URL = "https://api.finam.ru"
 CHUNK_DAYS = 31
 MAX_WINDOW_DAYS = 365
 MAX_CHUNKS = 12
+# Documented limit for every REST method: 200 requests per minute.
+REQUESTS_PER_MINUTE = 200
+MAX_RETRY_AFTER_SECONDS = 120.0
+NEWS_PAGE_SIZE = 100
+NEWS_MAX_PAGES = 20
 _MOSCOW = ZoneInfo(RU_SESSION_TIMEZONE)
 _BAR_FIELDS = ("timestamp", "open", "high", "low", "close", "volume", "is_data_snapshot")
+_UNSUPPORTED = "Finam research symbols are " + ", ".join(RU_WATCHLIST)
+
+
+@dataclass(frozen=True)
+class MinuteHistory:
+    bars: list[QuoteBar]
+    rejected: dict[str, int]
+
+
+@dataclass(frozen=True)
+class NewsHistoryPage:
+    items: list[dict]
+    pages: int
+    truncated: bool
+
+
+class RequestBudget:
+    """Sliding one-minute window shared by every adapter in the process."""
+
+    def __init__(
+        self,
+        per_minute: int = REQUESTS_PER_MINUTE,
+        *,
+        clock: Callable[[], float] = monotonic_time.monotonic,
+        sleep: Callable[[float], Any] = asyncio.sleep,
+    ):
+        self.per_minute = per_minute
+        self._clock = clock
+        self._sleep = sleep
+        self._stamps: deque[float] = deque()
+        self._blocked_until = 0.0
+
+    async def acquire(self) -> None:
+        while True:
+            now = self._clock()
+            while self._stamps and now - self._stamps[0] >= 60:
+                self._stamps.popleft()
+            wait = self._blocked_until - now
+            if len(self._stamps) >= self.per_minute:
+                wait = max(wait, self._stamps[0] + 60 - now)
+            if wait <= 0:
+                # No await between the check and the append: safe within one event loop.
+                self._stamps.append(now)
+                return
+            await self._sleep(wait)
+
+    def defer(self, seconds: float) -> None:
+        self._blocked_until = max(self._blocked_until, self._clock() + seconds)
+
+
+FINAM_REQUEST_BUDGET = RequestBudget()
+
+
+def retry_after_seconds(value: str | None, now: datetime | None = None) -> float | None:
+    """Parse Retry-After as delta-seconds or an HTTP date; cap unreasonable waits."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        seconds = float(value)
+    else:
+        try:
+            moment = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        seconds = (moment - (now or datetime.now(timezone.utc))).total_seconds()
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER_SECONDS)
 
 
 class FinamAdapter(MarketDataAdapter):
@@ -40,9 +119,11 @@ class FinamAdapter(MarketDataAdapter):
         *,
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = 15.0,
+        budget: RequestBudget | None = None,
     ):
         self._api_token = api_token
         self._client = client
+        self._budget = budget or FINAM_REQUEST_BUDGET
         if not 0 < timeout_seconds <= 60:
             raise ValueError("Finam timeout must be in (0, 60] seconds")
         self._timeout = httpx.Timeout(timeout_seconds)
@@ -51,9 +132,9 @@ class FinamAdapter(MarketDataAdapter):
         if not self._api_token or not self._api_token.strip():
             raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
         try:
-            sym = require_ru_symbol(symbol)
+            sym = require_ru_symbol(symbol, include_context=True)
         except ValueError:
-            raise PermanentIOError("UNSUPPORTED_INSTRUMENT", "Finam research symbols are GAZP, GMKN") from None
+            raise PermanentIOError("UNSUPPORTED_INSTRUMENT", _UNSUPPORTED) from None
         if adjustment_mode is not AdjustmentMode.RAW:
             raise PermanentIOError("UNSUPPORTED_ADJUSTMENT", "Finam supports raw source bars only")
         if end <= start or (end - start).days > MAX_WINDOW_DAYS:
@@ -99,7 +180,7 @@ class FinamAdapter(MarketDataAdapter):
                     if not boundary_row:
                         quote_time = russian_quote_time(session_day)
                     prices = [_decimal(row.get(name)) for name in ("open", "high", "low", "close")]
-                    volume = _decimal(row.get("volume"))
+                    volume = _volume(row, symbol)
                     if volume < 0 or volume != volume.to_integral_value():
                         raise ValueError("invalid share volume")
                     if boundary_row:
@@ -135,13 +216,22 @@ class FinamAdapter(MarketDataAdapter):
         )
 
     async def fetch_minutes(self, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
-        """Read one closed, minute-aligned window without writing to storage."""
+        """Read a strict research window. Any rejected row invalidates it."""
+        history = await self.fetch_minute_history(symbol, start, end)
+        if history.rejected:
+            raise PermanentIOError(
+                "FINAM_INVALID_M1_BAR", "Finam returned an invalid, duplicate or out-of-window minute"
+            )
+        return history.bars
+
+    async def fetch_minute_history(self, symbol: str, start: datetime, end: datetime) -> MinuteHistory:
+        """Return validated bars and safe rejection counts for the dashboard."""
         if not self._api_token or not self._api_token.strip():
             raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
         try:
-            symbol = require_ru_symbol(symbol)
+            symbol = require_ru_symbol(symbol, include_context=True)
         except ValueError:
-            raise PermanentIOError("UNSUPPORTED_INSTRUMENT", "Finam research symbols are GAZP, GMKN") from None
+            raise PermanentIOError("UNSUPPORTED_INSTRUMENT", _UNSUPPORTED) from None
         if any(stamp.utcoffset() is None or stamp.second or stamp.microsecond for stamp in (start, end)):
             raise PermanentIOError("INVALID_WINDOW", "M1 requires timezone-aware minute boundaries")
         start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
@@ -153,34 +243,52 @@ class FinamAdapter(MarketDataAdapter):
         async with httpx.AsyncClient(follow_redirects=False) as client:
             return await self._fetch_minutes(client, symbol, start, end)
 
-    async def _fetch_minutes(self, client, symbol: str, start: datetime, end: datetime) -> list[QuoteBar]:
+    async def _fetch_minutes(self, client, symbol: str, start: datetime, end: datetime) -> MinuteHistory:
         jwt = await self._open_session(client)
         rows = await self._read_bars(client, symbol, jwt, "TIME_FRAME_M1", start.isoformat(), end.isoformat())
         received: dict[datetime, QuoteBar] = {}
-        try:
-            for row in rows:
+        conflicted: set[datetime] = set()
+        rejected: Counter[str] = Counter()
+        for row in rows:
+            try:
                 stamp = _timestamp(row["timestamp"]).astimezone(timezone.utc)
-                if stamp.second or stamp.microsecond or not start <= stamp < end or stamp in received:
-                    raise ValueError("unexpected M1 timestamp")
-                open_, high, low, close, volume = map(
-                    _decimal, (row[key] for key in ("open", "high", "low", "close", "volume"))
-                )
+            except (ValueError, TypeError, KeyError, OverflowError):
+                rejected["timestamp"] += 1
+                continue
+            if stamp.second or stamp.microsecond:
+                rejected["timestamp"] += 1
+                continue
+            if not start <= stamp < end:
+                rejected["outside_window"] += 1
+                continue
+            try:
+                open_, high, low, close = map(_decimal, (row[key] for key in ("open", "high", "low", "close")))
+                volume = _volume(row, symbol)
                 if not (
                     0 < low <= min(open_, close) <= max(open_, close) <= high
                     and volume >= 0 and volume == volume.to_integral_value()
                 ):
                     raise ValueError("invalid M1 price or volume")
-                received[stamp] = QuoteBar(
+                bar = QuoteBar(
                     provider=self.provider_name, symbol=symbol, exchange=RU_EXCHANGE,
                     interval="1m", quote_time=stamp, open=open_, high=high, low=low,
                     close=close, volume=int(volume), adjustment_mode=AdjustmentMode.RAW,
                     session_timezone=RU_SESSION_TIMEZONE, currency=RU_CURRENCY,
                 )
-        except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
-            raise PermanentIOError(
-                "FINAM_INVALID_M1_BAR", "Finam returned an invalid, duplicate or out-of-window minute"
-            ) from None
-        return [received[stamp] for stamp in sorted(received)]
+            except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
+                rejected["ohlcv"] += 1
+                continue
+            if stamp in conflicted:
+                rejected["conflict"] += 1
+            elif stamp not in received:
+                received[stamp] = bar
+            elif received[stamp].ohlcv_tuple() == bar.ohlcv_tuple():
+                rejected["duplicate"] += 1
+            else:
+                del received[stamp]
+                conflicted.add(stamp)
+                rejected["conflict"] += 2
+        return MinuteHistory([received[stamp] for stamp in sorted(received)], dict(rejected))
 
     async def open_market_session(self) -> str:
         """Create a session for read-only live market subscriptions."""
@@ -199,8 +307,83 @@ class FinamAdapter(MarketDataAdapter):
             raise PermanentIOError("FINAM_INVALID_AUTH_RESPONSE", "Finam returned no usable session token")
         return jwt
 
+    async def fetch_asset(self, symbol: str) -> dict:
+        """Reference data for one registry instrument (GET /v1/assets/{symbol})."""
+        instrument = finam_symbol(symbol)
+        payload = await self._authorized_get(f"/v1/assets/{instrument}")
+        if not isinstance(payload, dict):
+            raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam asset response has an invalid schema")
+        return payload
+
+    async def fetch_news_sources(self) -> list[dict]:
+        payload = await self._authorized_get("/v1/news/sources")
+        sources = payload.get("sources") if isinstance(payload, dict) else None
+        if not isinstance(sources, list):
+            raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam news sources have an invalid schema")
+        return [row for row in sources if isinstance(row, dict) and isinstance(row.get("id"), str)]
+
+    async def fetch_news_history(
+        self,
+        symbols: list[str],
+        start: datetime,
+        end: datetime,
+        *,
+        page_size: int = NEWS_PAGE_SIZE,
+        max_pages: int = NEWS_MAX_PAGES,
+    ) -> NewsHistoryPage:
+        """Follow next_cursor until the feed ends; duplicates are left to the caller."""
+        if any(stamp.utcoffset() is None for stamp in (start, end)) or not start < end:
+            raise PermanentIOError("INVALID_WINDOW", "News history requires an aware window with start < end")
+        if not 1 <= page_size <= 100:
+            raise PermanentIOError("INVALID_WINDOW", "News page_size must be in 1..100")
+        instruments = [finam_symbol(symbol) for symbol in symbols]
+        params: dict[str, Any] = {
+            "filter.symbols": instruments,
+            "time_range.from": _rfc3339(start),
+            "time_range.to": _rfc3339(end),
+            "page_size": page_size,
+        }
+
+        async def read(client, jwt):
+            items: list[dict] = []
+            cursor = ""
+            seen_cursors: set[str] = set()
+            for page in range(1, max_pages + 1):
+                payload = await self._request(
+                    client, "GET", "/v1/news/history",
+                    headers={"Authorization": f"Bearer {jwt}"}, params={**params, "cursor": cursor},
+                )
+                rows = payload.get("items") if isinstance(payload, dict) else None
+                if not isinstance(rows, list):
+                    raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam news history has an invalid schema")
+                items.extend(row for row in rows if isinstance(row, dict))
+                cursor = payload.get("next_cursor") or ""
+                if not cursor:
+                    return NewsHistoryPage(items, page, False)
+                if cursor in seen_cursors:
+                    raise PermanentIOError("FINAM_INVALID_RESPONSE", "Finam repeated a news cursor")
+                seen_cursors.add(cursor)
+            return NewsHistoryPage(items, max_pages, True)
+
+        return await self._with_session(read)
+
+    async def _authorized_get(self, path: str, **params):
+        async def read(client, jwt):
+            return await self._request(
+                client, "GET", path, headers={"Authorization": f"Bearer {jwt}"}, params=params or None,
+            )
+        return await self._with_session(read)
+
+    async def _with_session(self, operation):
+        if not self._api_token or not self._api_token.strip():
+            raise PermanentIOError("FINAM_NOT_CONFIGURED", "FINAM_API_TOKEN is required")
+        if self._client is not None:
+            return await operation(self._client, await self._open_session(self._client))
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            return await operation(client, await self._open_session(client))
+
     async def _read_bars(self, client, symbol: str, jwt: str, timeframe: str, start: str, end: str) -> list:
-        instrument = f"{symbol}@{RU_EXCHANGE}"
+        instrument = finam_symbol(symbol)
         payload = await self._request(
             client, "GET", f"/v1/instruments/{instrument}/bars",
             headers={"Authorization": f"Bearer {jwt}"},
@@ -213,6 +396,7 @@ class FinamAdapter(MarketDataAdapter):
         return payload["bars"]
 
     async def _request(self, client, method, path, **kwargs):
+        await self._budget.acquire()
         try:
             response = await client.request(
                 method, FINAM_BASE_URL + path, timeout=self._timeout,
@@ -222,8 +406,16 @@ class FinamAdapter(MarketDataAdapter):
             # Never include the exception/request/body: an auth request contains a secret.
             raise TransientIOError("FINAM_NETWORK_ERROR", "Finam request failed or timed out") from None
         status = response.status_code
-        if status == 429 or status >= 500:
-            raise TransientIOError("FINAM_SOURCE_TRANSIENT", f"Finam temporary HTTP {status}")
+        if status == 429:
+            wait = retry_after_seconds(response.headers.get("Retry-After"))
+            # Without the header, pause the shared budget for one second.
+            self._budget.defer(wait if wait is not None else 1.0)
+            raise TransientIOError("FINAM_RATE_LIMITED", "Finam rate limit reached (HTTP 429)", retry_after=wait)
+        if status >= 500:
+            raise TransientIOError(
+                "FINAM_SOURCE_TRANSIENT", f"Finam temporary HTTP {status}",
+                retry_after=retry_after_seconds(response.headers.get("Retry-After")),
+            )
         if status in (401, 403):
             raise PermanentIOError("FINAM_AUTHORIZATION_FAILED", "Finam token or market-data permissions rejected")
         if status != 200:
@@ -245,6 +437,17 @@ def _timestamp(value: Any) -> datetime:
     if stamp.tzinfo is None:
         raise ValueError("timestamp must include a timezone")
     return stamp
+
+
+def _rfc3339(stamp: datetime) -> str:
+    return stamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _volume(row: dict, symbol: str) -> Decimal:
+    # Index values have no traded share volume.
+    if ru_instrument(symbol).get("kind") == "index" and row.get("volume") is None:
+        return Decimal(0)
+    return _decimal(row.get("volume"))
 
 
 def _decimal(value: Any) -> Decimal:

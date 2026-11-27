@@ -8,12 +8,23 @@
   "broker": {"provider": "finam", "access": "read_only"},
   "positions_configured": false,
   "instruments": [
-    {"symbol": "GAZP", "name": "Газпром", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GAZP@MISX"},
-    {"symbol": "GMKN", "name": "Норникель", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GMKN@MISX"}
+    {"symbol": "GAZP", "name": "Газпром", "letter": "Г", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GAZP@MISX"},
+    {"symbol": "GMKN", "name": "Норникель", "letter": "Н", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "GMKN@MISX"},
+    {"symbol": "SBER", "name": "Сбербанк", "letter": "С", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "SBER@MISX"},
+    {"symbol": "YDEX", "name": "Яндекс", "letter": "Я", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "YDEX@MISX"},
+    {"symbol": "X5", "name": "ИКС 5", "letter": "X", "exchange": "MISX", "board": "TQBR", "currency": "RUB", "finam_symbol": "X5@MISX", "dividend_stages": true}
   ],
+  "market_context": [
+    {"symbol": "IMOEX", "name": "Индекс МосБиржи", "letter": "I", "exchange": "MISX", "currency": "RUB", "finam_symbol": "IMOEX@MISX", "kind": "index", "requires_live_verification": true}
+  ],
+  "news_sources": {
+    "official": [],
+    "note": "Коды источников раскрытий заполняются после ответа GET /v1/news/sources. До этого сообщения ленты дают только WATCH."
+  },
   "notes": [
     "Исследовательский список инструментов; доли, количества и сумма вложений не заданы.",
     "Реальные позиции брокерского счёта этим файлом не описываются.",
-    "Сырые ряды не скорректированы на дивиденды и дробления, в том числе дробление GMKN."
+    "Сырые ряды не скорректированы на дивиденды и дробления, в том числе дробление GMKN.",
+    "Идентификаторы Финама записаны в формате ticker@mic и подтверждаются запросом GET /v1/assets/{symbol} в живой проверке."
   ]
 }

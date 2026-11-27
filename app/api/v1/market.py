@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import aclosing
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
@@ -20,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import database
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.dependencies import get_current_active_user, get_current_user, security
 from app.core.error_handler import AppException, NotFoundError
@@ -29,9 +31,13 @@ from app.core.config import settings
 from worker.adapters.finam_adapter import FinamAdapter
 from worker.adapters.finam_stream import stream_finam_market
 from worker.finam_live_status import live_failure_stage
+from worker.finam_monitor import news_status_for
+from worker.finam_news import NewsLedger, parse_news
 from worker.io_retry import PermanentIOError, TransientIOError
 from worker.ipo import search_ipos
-from worker.russian_market import provider_timezone
+from worker.news_repository import NewsRepository
+from worker.news_signals import active_events
+from worker.russian_market import RU_CONTEXT, RU_INSTRUMENTS, RU_WATCHLIST, provider_timezone, require_ru_symbol
 from worker.portfolio import research_portfolio
 
 logger = structlog.get_logger()
@@ -279,18 +285,100 @@ async def list_ipos(
     return await search_ipos(market, month, query)
 
 
+def _finam_token() -> str | None:
+    return settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
+
+
+def _registry_symbol(symbol: str) -> str:
+    try:
+        return require_ru_symbol(symbol, include_context=True)
+    except ValueError as exc:
+        raise AppException(code="UNSUPPORTED_INSTRUMENT", message=str(exc), status_code=422) from None
+
+
+@router.get("/instruments")
+async def list_instruments(current_user: User = Depends(get_current_active_user)):
+    """The server registry shared by the dashboard, daily collection and the live stream."""
+    del current_user
+    return {
+        "watchlist": [
+            {key: item[key] for key in ("symbol", "name", "letter", "exchange", "board", "finam_symbol")}
+            | {"kind": "equity", "dividend_stages": bool(item.get("dividend_stages"))}
+            for item in RU_INSTRUMENTS.values()
+        ],
+        "market_context": [
+            {key: item.get(key) for key in ("symbol", "name", "letter", "exchange", "finam_symbol", "kind")}
+            | {"verification": "LIVE_CHECK_REQUIRED" if item.get("requires_live_verification") else "CONFIGURED"}
+            for item in RU_CONTEXT.values()
+        ],
+        "timezone": {"stored": "UTC", "displayed": "Europe/Moscow"},
+    }
+
+
+@router.get("/finam/news")
+async def read_finam_news(
+    hours: int = Query(24, ge=1, le=72),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Finam news for the watchlist with its own feed status; quotes are not involved.
+
+    Every version is stored once. The reported availability uses the first
+    time AEGIS stored that version, so a repeated read never moves it.
+    """
+    del current_user
+    now = datetime.now(timezone.utc)
+    adapter = FinamAdapter(_finam_token())
+    feed = {"status": "OK", "code": None, "checked_at": now.isoformat()}
+    try:
+        sources = await adapter.fetch_news_sources()
+        page = await adapter.fetch_news_history(list(RU_WATCHLIST), now - timedelta(hours=hours), now)
+    except (PermanentIOError, TransientIOError) as exc:
+        if exc.code not in {"FINAM_NOT_CONFIGURED", "FINAM_AUTHORIZATION_FAILED"}:
+            logger.warning("Finam news feed failed", code=exc.code)
+        feed.update(status=news_status_for(exc.code), code=exc.code)
+        return {"feed": feed, "sources": [], "items": [], "events": [], "storage": None}
+
+    ledger = NewsLedger()
+    parsed = []
+    rejected = 0
+    for row in page.items:
+        try:
+            parsed.append(parse_news(row, now))
+        except (ValueError, TypeError, AttributeError):
+            rejected += 1
+    storage = {"status": "STORED"}
+    try:
+        repository = NewsRepository(database.engine)
+        storage.update(await repository.store(parsed))
+        stored_at = await repository.first_observed(parsed)
+        parsed = [replace(item, observed_at=stored_at.get(item.key, item.observed_at)) for item in parsed]
+    except Exception as exc:  # Storage is optional for reading the feed.
+        logger.warning("Finam news storage failed", error_type=type(exc).__name__)
+        storage = {"status": "UNAVAILABLE"}
+    counts = ledger.add(parsed)
+    return {
+        "feed": {**feed, "pages": page.pages, "truncated": page.truncated},
+        "sources": sources,
+        "counts": {**counts, "rejected": rejected, "received": len(page.items)},
+        "storage": storage,
+        "items": [item.to_dict() for item in ledger.known_at(now)[:100]],
+        "events": active_events(ledger, RU_WATCHLIST, now),
+    }
+
+
 @router.get("/finam/minutes", response_model=FinamMinutes)
 async def read_finam_minutes(
-    symbol: Literal["GAZP", "GMKN"],
-    start: datetime,
-    end: datetime,
+    symbol: str = Query(..., min_length=1, max_length=16, pattern=r"^[A-Za-z0-9]+$"),
+    start: datetime = Query(...),
+    end: datetime = Query(...),
     current_user: User = Depends(get_current_active_user),
 ):
     """Read a closed M1 window directly from Finam, with an exclusive end."""
     del current_user
-    token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
+    symbol = _registry_symbol(symbol)
+    token = _finam_token()
     try:
-        bars = await FinamAdapter(token).fetch_minutes(symbol, start, end)
+        history = await FinamAdapter(token).fetch_minute_history(symbol, start, end)
     except TransientIOError as exc:
         raise AppException(code=exc.code, message=str(exc), status_code=503) from exc
     except PermanentIOError as exc:
@@ -299,12 +387,20 @@ async def read_finam_minutes(
 
     start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
     expected = (end - start) // timedelta(minutes=1)
+    bars = history.bars
+    if history.rejected:
+        logger.warning("Finam minute history rejected rows", symbol=symbol, reasons=history.rejected)
+    if not bars:
+        status = "INVALID" if history.rejected else "EMPTY"
+    else:
+        status = "READY" if len(bars) == expected and not history.rejected else "PARTIAL"
     return FinamMinutes(
         symbol=symbol,
         start=start,
         end=end,
         expected_minutes=expected,
-        status="READY" if len(bars) == expected else ("PARTIAL" if bars else "EMPTY"),
+        status=status,
+        rejected=history.rejected,
         items=[FinamMinute(
             quote_time=bar.quote_time, open=str(bar.open), high=str(bar.high),
             low=str(bar.low), close=str(bar.close), volume=bar.volume,
@@ -346,7 +442,7 @@ async def _live_events(jwt: str):
     responses={200: {"content": {"application/x-ndjson": {}}}},
 )
 async def live_finam_market():
-    """Stream NDJSON quotes and M1 candle updates for GAZP and GMKN."""
+    """Stream NDJSON quotes and M1 candle updates for every registry instrument."""
     token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else None
     try:
         jwt = await FinamAdapter(token).open_market_session()

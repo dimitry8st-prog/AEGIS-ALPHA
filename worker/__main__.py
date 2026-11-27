@@ -18,12 +18,14 @@ from worker.adapters.moex_adapter import MoexAdapter
 from worker.adapters.finam_adapter import FinamAdapter
 from worker.config import WorkerSettings
 from worker.export import ExportError, export_quotes
+from worker.finam_monitor import run_monitor
 from worker.finam_schedule import run_finam_schedule
+from worker.io_retry import PermanentIOError
 from worker.ipo import search_ipos
 from worker.pipeline import MarketDataPipeline
 from worker.repository import QuoteRepository, create_engine
 from worker.types import AdjustmentMode
-from worker.russian_market import RU_SYMBOLS, SUPPORTED_PROVIDERS
+from worker.russian_market import RU_WATCHLIST, SUPPORTED_PROVIDERS
 from worker.portfolio import research_portfolio
 
 
@@ -49,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument(
         "--symbols",
         default=None,
-        help="Comma-separated tickers (US: AAPL,MSFT,NVDA; MOEX/Finam: GAZP,GMKN)",
+        help="Comma-separated tickers (US: AAPL,MSFT,NVDA; MOEX/Finam default: " + ",".join(RU_WATCHLIST) + ")",
     )
     collect.add_argument("--start", required=True, type=_parse_date)
     collect.add_argument(
@@ -84,8 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--end", required=True, type=_parse_date, help="Exclusive end date")
     export.add_argument("--output-dir", required=True, type=Path)
 
-    sub.add_parser("portfolio", help="Show the GAZP/GMKN research watchlist (no brokerage positions)")
+    sub.add_parser("portfolio", help="Show the MOEX research watchlist (no brokerage positions)")
     sub.add_parser("finam-daily", help="Collect Finam daily candles at 08:30 Moscow time until stopped")
+    monitor = sub.add_parser(
+        "finam-monitor",
+        help="Watch registry tickers and IMOEX (QUOTES/BARS + REST M1 backfill) and Finam news until stopped",
+    )
+    monitor.add_argument("--status-file", type=Path, default=Path("data/finam-monitor.json"))
+    monitor.add_argument("--news-interval", type=float, default=60.0, help="Seconds between news polls")
     ipo = sub.add_parser("ipo", help="Find companies in the MOEX and US IPO calendars")
     ipo.add_argument("--market", choices=("all", "moex", "us"), default="all")
     ipo.add_argument("--month", type=_parse_month, help="US calendar month YYYY-MM")
@@ -96,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def _run_collect(args: argparse.Namespace) -> int:
     settings = WorkerSettings()
     russian = args.provider in {"moex", "finam"}
-    default_symbols = ",".join(sorted(RU_SYMBOLS)) if russian else "AAPL,MSFT,NVDA"
+    default_symbols = ",".join(RU_WATCHLIST) if russian else "AAPL,MSFT,NVDA"
     symbols = [s.strip().upper() for s in (args.symbols or default_symbols).split(",") if s.strip()]
     adjustment = AdjustmentMode(args.adjustment or ("raw" if russian else "auto_adjusted"))
 
@@ -168,6 +176,20 @@ async def _run_finam_daily() -> int:
     return 0
 
 
+async def _run_finam_monitor(args: argparse.Namespace) -> int:
+    settings = WorkerSettings()
+    token = settings.FINAM_API_TOKEN.get_secret_value() if settings.FINAM_API_TOKEN else ""
+    if not token.strip():
+        print("FINAM_NOT_CONFIGURED: FINAM_API_TOKEN is required.", file=sys.stderr)
+        return 2
+    try:
+        await run_monitor(FinamAdapter(token), status_file=args.status_file, news_interval=args.news_interval)
+    except PermanentIOError as exc:
+        print(f"{exc.code}: Finam monitor stopped.", file=sys.stderr)
+        return 1
+    return 0
+
+
 async def _run_ipo(args: argparse.Namespace) -> int:
     report = await search_ipos(args.market, args.month, args.query)
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -189,6 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "finam-daily":
         try:
             return asyncio.run(_run_finam_daily())
+        except KeyboardInterrupt:
+            return 0
+    if args.command == "finam-monitor":
+        try:
+            return asyncio.run(_run_finam_monitor(args))
         except KeyboardInterrupt:
             return 0
     parser.error(f"unknown command {args.command}")

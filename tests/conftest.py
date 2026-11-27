@@ -15,6 +15,14 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
 os.environ.setdefault("IO_RETRY_WAIT_SECONDS", "0.05")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_finam_budget(monkeypatch):
+    # The process-wide 200 requests/minute budget must not leak between tests.
+    from worker.adapters import finam_adapter
+
+    monkeypatch.setattr(finam_adapter, "FINAM_REQUEST_BUDGET", finam_adapter.RequestBudget())
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     return os.environ["DATABASE_URL"]
